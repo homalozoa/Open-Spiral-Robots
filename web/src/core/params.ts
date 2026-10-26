@@ -122,6 +122,20 @@ export const RANGES = {
   joint_angle: { min: -90, max: 90, step: 0.5, decimals: 1 },
 } satisfies Record<string, Range>;
 
+/**
+ * Validation limits for loaded data. Wider than the slider ranges: uniform
+ * scaling (core/scaling.ts) legitimately moves a, hole sizes, stiffness and
+ * damping far outside the ranges the engineering sliders show.
+ */
+export const LIMITS: Record<string, { min: number; max: number }> = {
+  ...RANGES,
+  a: { min: 1e-4, max: 1e4 },
+  tip_hole_size: { min: 1e-5, max: 1e3 },
+  base_hole_size: { min: 1e-5, max: 1e3 },
+  sim_stiffness: { min: 0, max: 1e12 },
+  sim_damping: { min: 0, max: 1e12 },
+};
+
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -172,7 +186,7 @@ export function parseParams(raw: unknown, base: Params = defaultParams()): Param
   }
   out.dtheta_deg = Math.round(out.dtheta_deg);
   out.num_cables = Math.round(out.num_cables);
-  for (const [k, r] of Object.entries(RANGES)) {
+  for (const [k, r] of Object.entries(LIMITS)) {
     if (k in out && typeof (out as unknown as Record<string, unknown>)[k] === "number") {
       const rec = out as unknown as Record<string, number>;
       rec[k] = clamp(rec[k], r.min, r.max);

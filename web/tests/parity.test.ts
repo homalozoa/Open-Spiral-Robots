@@ -100,8 +100,9 @@ describe("formatting and params", () => {
     expect(back.joint_angles).toEqual([1, 2]);
   });
   it("clamps bad input", () => {
-    const p = parseParams({ a: 1e9, b: "x", dtheta_deg: 12.7, num_cables: 99 });
-    expect(p.a).toBe(100);
+    const p = parseParams({ a: 1e9, b: "x", dtheta_deg: 12.7, num_cables: 99, sim_stiffness: 168 });
+    expect(p.a).toBe(1e4);
+    expect(p.sim_stiffness).toBe(168); // scaled designs keep their physics
     expect(p.b).toBe(defaultParams().b);
     expect(p.dtheta_deg).toBe(13);
     expect(p.num_cables).toBe(8);

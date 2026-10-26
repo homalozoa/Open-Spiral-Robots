@@ -28,6 +28,27 @@ export interface MujocoXmlOptions {
   bendDirDeg?: number;
   extrusionDepth?: number;
   tendonConfigs?: (TendonConfigIn | null | undefined)[] | null;
+  /**
+   * Web-only scene extras for the live showcase. Leave undefined to get the
+   * desktop tool's exact output.
+   */
+  scene?: SceneExtras;
+}
+
+export interface SceneExtras {
+  /** pose of link1 (the base) in the world, metres / wxyz */
+  rootPos?: [number, number, number];
+  rootQuat?: [number, number, number, number];
+  timestep?: number;
+  /** extra top-level lines right after <compiler> (e.g. <default>) */
+  head?: string[];
+  /** extra lines inside <asset> and <worldbody> */
+  asset?: string[];
+  worldbody?: string[];
+  /** extra top-level elements (e.g. <contact>, <visual>) */
+  extra?: string[];
+  /** contype/conaffinity for the robot link geoms */
+  linkContact?: [number, number];
 }
 
 type V3 = [number, number, number];
@@ -123,9 +144,12 @@ export function generateMujocoXml(o: MujocoXmlOptions): string {
   lines.push('<mujoco model="spiral_robot">');
   lines.push('  <compiler angle="radian"/>');
   const gvec = gravity === 0 ? "0 0 0" : `0 0 ${fmtG(-gravity, 9)}`;
-  lines.push(`  <option gravity="${gvec}"/>`);
+  const sc = o.scene;
+  if (sc?.head) lines.push(...sc.head.map((l) => `  ${l}`));
+  lines.push(`  <option gravity="${gvec}"${sc?.timestep ? ` timestep="${fmtG(sc.timestep, 6)}"` : ""}/>`);
   lines.push("  <asset>");
   lines.push(...meshes);
+  if (sc?.asset) lines.push(...sc.asset.map((l) => `    ${l}`));
   lines.push(
     '    <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>',
   );
@@ -160,8 +184,12 @@ export function generateMujocoXml(o: MujocoXmlOptions): string {
     return ` quat="${fmtF(Math.cos(half), 9)} ${fmtF(jointAxis[0] * s, 9)} ${fmtF(jointAxis[1] * s, 9)} ${fmtF(jointAxis[2] * s, 9)}"`;
   };
 
-  lines.push(`    <body name="link1" pos="0 0 ${fmtF(0, 9)}">`);
-  lines.push('      <geom type="mesh" mesh="baselink_1"/>');
+  if (sc?.worldbody) lines.push(...sc.worldbody.map((l) => `    ${l}`));
+  const rootPos = sc?.rootPos ? sc.rootPos.map((v) => fmtF(v, 9)).join(" ") : `0 0 ${fmtF(0, 9)}`;
+  const rootQuat = sc?.rootQuat ? ` quat="${sc.rootQuat.map((v) => fmtF(v, 9)).join(" ")}"` : "";
+  const geomContact = sc?.linkContact ? ` contype="${sc.linkContact[0]}" conaffinity="${sc.linkContact[1]}"` : "";
+  lines.push(`    <body name="link1" pos="${rootPos}"${rootQuat}>`);
+  lines.push(`      <geom type="mesh" mesh="baselink_1"${geomContact}/>`);
   for (const site of buildSites(1, 1)) lines.push(`      ${site.xml}`);
 
   for (let i = 1; i < numUnits; i++) {
@@ -169,7 +197,7 @@ export function generateMujocoXml(o: MujocoXmlOptions): string {
     const linkIdx = i + 1;
     lines.push(`      <body name="link${linkIdx}" pos="0 0 ${fmtF(zOffset, 9)}"${quatStr(jointAnglesRad[i - 1])}>`);
     lines.push(`        ${jointXml(stiffness, damping)}`);
-    lines.push(`        <geom type="mesh" mesh="baselink_${i + 1}"/>`);
+    lines.push(`        <geom type="mesh" mesh="baselink_${i + 1}"${geomContact}/>`);
     const childScale = currentScale * scaleStep;
     for (const site of buildSites(childScale, linkIdx)) lines.push(`        ${site.xml}`);
     currentScale *= scaleStep;
@@ -269,6 +297,7 @@ export function generateMujocoXml(o: MujocoXmlOptions): string {
     );
   }
   lines.push("  </actuator>");
+  if (sc?.extra) lines.push(...sc.extra.map((l) => `  ${l}`));
   lines.push("</mujoco>");
   return lines.join("\n") + "\n";
 }
