@@ -1,6 +1,7 @@
 // Showcase widgets: tendon joystick, log-scale slider, rolling timeline chart.
 
 import { el } from "../ui/controls";
+import { paintRange } from "../ui/icons";
 import { TENDON_HEX } from "./stage";
 
 const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
@@ -111,6 +112,7 @@ export function logSlider(min: number, max: number, value: number, format: (v: n
   const fromPos = (p: number) => min * (max / min) ** (p / 1000);
   const input = el("input", { type: "range", min: 0, max: 1000, step: 1, class: "log-range", "aria-label": "Length" });
   input.value = String(toPos(value));
+  paintRange(input);
   const tickRow = el("div", { class: "log-ticks" });
   for (const t of ticks) {
     const s = el("span", { style: `left:${toPos(t) / 10}%` }, format(t));
@@ -121,6 +123,7 @@ export function logSlider(min: number, max: number, value: number, format: (v: n
     root: el("div", { class: "log-slider" }, input, tickRow),
     set(v) {
       if (document.activeElement !== input) input.value = String(toPos(v));
+      paintRange(input);
     },
   };
 }

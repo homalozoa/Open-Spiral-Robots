@@ -54,6 +54,10 @@ export function numberControl(o: NumberControlOptions): NumberControl {
   const row = el("div", { class: "ctl-row" }, label, slider, box);
 
   const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(o.decimals) : "");
+  const paint = () => {
+    const p = max > min ? ((Math.min(max, Math.max(min, value)) - min) / (max - min)) * 100 : 0;
+    slider.style.setProperty("--p", `${p}%`);
+  };
   const sync = () => {
     slider.min = String(min);
     slider.max = String(max);
@@ -63,12 +67,14 @@ export function numberControl(o: NumberControlOptions): NumberControl {
     box.max = String(round(max, o.decimals));
     box.step = String(o.step);
     if (document.activeElement !== box) box.value = fmt(value);
+    paint();
   };
   sync();
 
   slider.addEventListener("input", () => {
     value = Number(slider.value);
     box.value = fmt(value);
+    paint();
     o.onInput(value);
   });
   const commit = () => {

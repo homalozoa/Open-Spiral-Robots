@@ -24,11 +24,17 @@ timeline that charts curl and tip speed and can be scrubbed to replay any
 moment. **Hide** (or the `H` key) folds the console to a single strip so the
 robot gets the whole screen; on phones it starts folded.
 
-The look follows where the spiral comes from. By default the robot floats in
-**space** — a star field, a holographic floor grid and, behind the robot, a
-spiral galaxy whose arms use the robot's own growth rate b (change the taper
-and the galaxy changes with it: the same law r = a·e^(bθ) from centimetres to
-light years). The **ocean** scene (top-bar switch) puts it under water instead:
+The look follows where the spiral comes from, framed like an observatory
+plate. By default the robot stands in **space**: a porcelain body on an
+engraved instrument disc, a nebula and bright stars, a crescent ice giant and,
+behind the robot, a spiral galaxy whose arms use the robot's own growth rate b
+(change the taper and the galaxy changes with it: the same law r = a·e^(bθ)
+from centimetres to light years). The links warm to coral as the tendons pull,
+and the tendons glow under a soft bloom. Around the stage sit corner marks, a
+live scale bar, a readout rail (curl, tip speed, peak speed, mass, real-time
+factor) and the live equation of the current design under the wordmark. Type
+is Instrument Serif for titles, Inter for the interface and JetBrains Mono for
+numbers. The **ocean** scene (top-bar switch) puts it under water instead:
 a nacre body over a sand bed with moving caustics, sunlit shallows in the light
 theme and open ocean in the dark one. The mark is a nautilus drawn from the
 same law. The space scene keeps the whole app, engineering drawer included,

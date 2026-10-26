@@ -1,14 +1,19 @@
+import "@fontsource/instrument-serif/400.css";
+import "@fontsource/instrument-serif/400-italic.css";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./ui/style.css";
 import "./showcase/showcase.css";
 import { Vector3 } from "three";
 import { Store, shareLink } from "./app/store";
 import { cableCount, checkDesign } from "./core/design";
-import { baseLinkMesh } from "./core/linkMesh";
+import { renderLinkMesh } from "./core/linkMesh";
 import { defaultParams, parseParams, RANGES, type Params } from "./core/params";
 import { formatLength, formatMass, formatTime, scaleParams } from "./core/scaling";
 import { resolve } from "./core/state";
 import { getLog, logger } from "./debug/log";
 import { button, el, numberControl, type NumberControl } from "./ui/controls";
+import { icon, installRangePainter } from "./ui/icons";
 import { PhysicsClient } from "./showcase/client";
 import { getLang, setLang, t, type Key } from "./showcase/i18n";
 import { DEFAULT_TUNING, type ObjectKind, type SceneObject } from "./showcase/physics";
@@ -57,7 +62,9 @@ const loading = el("div", { class: "stage-loading" }, nautilus("loader"), el("sp
 // ---------------------------------------------------------------- top bar
 const tabs = el("div", { class: "modes", role: "tablist" });
 const modeBtn = (m: Mode, k: Key) => {
-  const b = button(t(k), () => setMode(m), "mode-tab");
+  const n = { flex: "01", speed: "02", scale: "03" }[m];
+  const b = button("", () => setMode(m), "mode-tab");
+  b.append(el("span", { class: "mode-num" }, n), el("span", { class: "mode-lbl" }, t(k)));
   b.setAttribute("role", "tab");
   b.dataset.mode = m;
   tabs.append(b);
@@ -71,21 +78,30 @@ function say(msg: string) {
   toast.classList.add("on");
   setTimeout(() => toast.classList.remove("on"), 1800);
 }
+// the live law of the current design, typeset under the wordmark
+const equation = el("div", { class: "equation", "aria-live": "off" });
+const iconBtn = (name: Parameters<typeof icon>[0], label: string, onClick: () => void, cls = "chip") => {
+  const b = button("", onClick, cls, label);
+  b.setAttribute("aria-label", label);
+  b.append(icon(name), el("span", { class: "chip-label" }, label));
+  return b;
+};
+const langBtn = iconBtn("globe", getLang() === "zh" ? "EN" : "中文", () => {
+  setLang(getLang() === "zh" ? "en" : "zh");
+  location.reload();
+});
 const topbar = el(
   "header",
   { class: "topbar-show" },
-  el("div", { class: "brand-show" }, nautilus("logo"), el("div", {}, el("strong", {}, "OpenSpiRobs"), el("small", {}, t("tagline")))),
+  el("div", { class: "brand-show" }, nautilus("logo"), el("div", { class: "brand-text" }, el("div", { class: "wordmark" }, "OpenSpiRobs"), equation)),
   tabs,
   el(
     "div",
     { class: "top-actions" },
-    button(getLang() === "zh" ? "EN" : "中", () => {
-      setLang(getLang() === "zh" ? "en" : "zh");
-      location.reload();
-    }, "chip", "Language"),
+    langBtn,
     envBtn(),
-    button(t("share"), () => void share(), "chip desktop-only"),
-    labelled(button("⚙", () => openEngineering(true), "chip accent", t("engineering")), t("engineering")),
+    iconBtn("share", t("share"), () => void share(), "chip desktop-only"),
+    iconBtn("sliders", t("engineering"), () => openEngineering(true), "chip accent"),
   ),
 );
 
@@ -134,7 +150,7 @@ function setLength(mm: number) {
 }
 
 // ---------------------------------------------------------------- HUD
-const hud = el("div", { class: "metrics-strip", "aria-label": "Metrics" });
+const hud = el("aside", { class: "readouts", "aria-label": "Metrics" });
 const hudItems = new Map<string, HTMLElement>();
 for (const [k, label] of [
   ["curl", t("curl")],
@@ -145,7 +161,7 @@ for (const [k, label] of [
 ] as const) {
   const v = el("span", { class: "hud-v" }, "—");
   hudItems.set(k, v);
-  hud.append(el("div", { class: "hud-row" }, el("span", { class: "hud-k" }, label), v));
+  hud.append(el("div", { class: "hud-row", "data-k": k }, el("span", { class: "hud-k" }, label), v));
 }
 let peakSpeed = 0;
 
@@ -258,12 +274,20 @@ const trailChk = checkbox(t("trail"), true, (v) => {
 });
 const slowSel = el("select", { "aria-label": t("slowFactor") });
 for (const f of [1, 4, 10, 30, 100]) slowSel.append(el("option", { value: f, selected: f === 10 }, `1/${f}×`));
-const strikeBtn = button(`▶ ${t("strike")}`, () => void strike(), "btn-show strike");
+const strikeBtn = button("", () => void strike(), "btn-show strike");
+strikeBtn.append(icon("bolt", 18), el("span", {}, t("strike")), el("kbd", {}, "Space"));
+addEventListener("keydown", (e: KeyboardEvent) => {
+  const tag = (e.target as HTMLElement).tagName;
+  if (e.code === "Space" && ui.mode === "speed" && tag !== "INPUT" && tag !== "SELECT" && tag !== "BUTTON" && !strikeBtn.disabled) {
+    e.preventDefault();
+    void strike();
+  }
+});
 const speedDock = el(
   "section",
   { class: "cpanel mode-col", "data-mode": "speed" },
   el("div", { class: "dock-col" }, strikeBtn, el("div", { class: "row-split" }, el("span", { class: "muted" }, t("force")), force), el("p", { class: "hint" }, t("strikeHint"))),
-  el("div", { class: "dock-col grow" }, results, el("div", { class: "row-split" }, ghostChk, trailChk), el("div", { class: "row-split" }, button(t("slowmo"), () => void replayStrike(), "btn-show"), slowSel)),
+  el("div", { class: "dock-col grow" }, results, el("div", { class: "row-split" }, ghostChk, trailChk), el("div", { class: "row-split" }, iconLabel(button(t("slowmo"), () => void replayStrike(), "btn-show"), "replay"), slowSel)),
 );
 let lastStrike: { tEnd: number; series: Awaited<ReturnType<PhysicsClient["series"]>>; t90: number; vmax: number; peak: number; L: number } | null = null;
 
@@ -456,8 +480,10 @@ function drawLaw() {
 
 // ---------------------------------------------------------------- timeline
 const timelineW = timeline({ curl: t("curl"), speed: t("tipSpeed") });
-const playBtn = button("⏸", () => setRun(!ui.running, ui.speed), "icon-btn", t("pause"));
-const liveBtn = button(t("live"), () => goLive(), "chip small");
+const playBtn = button("", () => setRun(!ui.running, ui.speed), "icon-btn", t("pause"));
+playBtn.append(icon("pause"));
+const liveBtn = button("", () => goLive(), "chip small live-chip");
+liveBtn.append(icon("live", 10), el("span", {}, t("live")));
 const speedSel = el("select", { "aria-label": t("timeScale") });
 for (const f of [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2]) speedSel.append(el("option", { value: f, selected: f === 1 }, `${f}×`));
 speedSel.addEventListener("change", () => setRun(ui.running, Number(speedSel.value)));
@@ -466,12 +492,12 @@ const timelineBar = el(
   "footer",
   { class: "timeline-row" },
   playBtn,
-  button("↺", () => {
+  iconOnly(button("", () => {
     phys.send({ type: "reset" });
     timelineW.clear();
     stage.clearTrail();
     peakSpeed = 0;
-  }, "icon-btn", t("resetPose")),
+  }, "icon-btn", t("resetPose")), "reset"),
   speedSel,
   timelineW.root,
   timeLabel,
@@ -492,7 +518,7 @@ function setRun(running: boolean, speed: number) {
     ui.replayT = null;
     stopReplay();
   }
-  playBtn.textContent = running ? "⏸" : "▶";
+  playBtn.replaceChildren(icon(running ? "pause" : "play"));
   playBtn.title = running ? t("pause") : t("play");
   liveBtn.classList.toggle("on", running);
   phys.send({ type: "run", running, speed });
@@ -544,6 +570,7 @@ qualitySel.addEventListener("change", () => {
 });
 function syncQuality() {
   app.classList.toggle("q-low", stage.quality === "low");
+  app.classList.toggle("q-high", stage.quality === "high");
   const auto = qualitySel.options[0];
   auto.textContent = stage.autoQuality ? `${t("auto")} · ${t(stage.quality)}` : t("auto");
 }
@@ -559,10 +586,11 @@ let collapsed = (() => {
   return matchMedia("(max-width: 700px)").matches;
 })();
 const collapseBtn = button("", () => setCollapsed(!collapsed), "collapse-btn");
+const chapter = el("div", { class: "chapter" });
 const consoleEl = el(
   "section",
   { class: "console", "aria-label": "Controls" },
-  el("div", { class: "console-head" }, hud, el("span", { class: "spacer" }), qualitySel, collapseBtn),
+  el("div", { class: "console-head" }, chapter, el("span", { class: "spacer" }), el("label", { class: "select-wrap", title: t("quality") }, el("span", { class: "select-k" }, t("quality")), qualitySel), collapseBtn),
   el("div", { class: "console-body", id: "console-body" }, flexDock, speedDock, scaleDock, shapePanel),
   timelineBar,
 );
@@ -570,7 +598,7 @@ collapseBtn.setAttribute("aria-controls", "console-body");
 function setCollapsed(c: boolean) {
   collapsed = c;
   consoleEl.classList.toggle("collapsed", c);
-  collapseBtn.textContent = c ? `▴ ${t("expand")}` : `▾ ${t("collapse")}`;
+  collapseBtn.replaceChildren(icon(c ? "chevronUp" : "chevronDown"), el("span", {}, c ? t("expand") : t("collapse")));
   collapseBtn.setAttribute("aria-expanded", String(!c));
   try {
     localStorage.setItem("openspirobs.collapsed", c ? "1" : "0");
@@ -584,12 +612,28 @@ addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key.toLowerCase() === "h" && !e.metaKey && !e.ctrlKey && tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") setCollapsed(!collapsed);
 });
 
-app.append(stageHost, loading, topbar, consoleEl, toast, engHost);
+// cinematic frame marks around the free area, and a live scale bar
+const frameEl = el("div", { class: "frame-marks", "aria-hidden": "true" }, el("i", { class: "tl" }), el("i", { class: "tr" }), el("i", { class: "bl" }), el("i", { class: "br" }));
+const scaleBarLine = el("span", { class: "sb-line" });
+const scaleBarText = el("span", { class: "sb-text" });
+const scaleBar = el("div", { class: "scale-bar", "aria-hidden": "true" }, scaleBarLine, scaleBarText);
+frameEl.append(scaleBar);
+stage.onRender = (mpp: number) => {
+  // a 1-2-5 length near 110 px
+  const target = mpp * 110;
+  const p10 = 10 ** Math.floor(Math.log10(target));
+  const nice = [1, 2, 5, 10].map((k) => k * p10).reduce((a, b) => (Math.abs(b - target) < Math.abs(a - target) ? b : a));
+  scaleBarLine.style.width = `${(nice / mpp).toFixed(1)}px`;
+  scaleBarText.textContent = formatLength(nice * 1000);
+};
+app.append(stageHost, frameEl, loading, topbar, hud, consoleEl, toast, engHost);
 setCollapsed(collapsed);
 
 function setMode(m: Mode) {
   ui.mode = m;
   app.dataset.mode = m;
+  const meta = { flex: ["01", "modeFlex", "descFlex"], speed: ["02", "modeSpeed", "descSpeed"], scale: ["03", "modeScale", "descScale"] }[m] as [string, Key, Key];
+  chapter.replaceChildren(el("span", { class: "chapter-num" }, meta[0]), el("span", { class: "chapter-title" }, t(meta[1])), el("span", { class: "chapter-desc" }, t(meta[2])));
   for (const b of tabs.querySelectorAll<HTMLElement>(".mode-tab")) b.setAttribute("aria-selected", String(b.dataset.mode === m));
   stopReplay();
   if (m !== "speed") {
@@ -610,13 +654,14 @@ function setMode(m: Mode) {
 
 /** Keep the robot framed in the part of the screen the panels leave free. */
 function updateSafeArea() {
+  const W = app.clientWidth;
   const H = app.clientHeight;
-  stage.setSafeArea({
-    left: 0,
-    right: 0,
-    top: topbar.getBoundingClientRect().bottom + 8,
-    bottom: Math.max(0, H - consoleEl.getBoundingClientRect().top + 8),
-  });
+  const wide = W > 900;
+  const top = topbar.getBoundingClientRect().bottom + 8;
+  const bottom = Math.max(0, H - consoleEl.getBoundingClientRect().top + 8);
+  const right = wide ? W - hud.getBoundingClientRect().left + 12 : 0;
+  stage.setSafeArea({ left: wide ? 24 : 0, right, top, bottom });
+  Object.assign(frameEl.style, { top: `${top}px`, bottom: `${bottom}px`, left: `${wide ? 24 : 10}px`, right: `${wide ? right : 10}px` });
 }
 new ResizeObserver(updateSafeArea).observe(app);
 new ResizeObserver(updateSafeArea).observe(consoleEl);
@@ -643,12 +688,13 @@ function syncShape() {
     lengthSlider.set(d.length);
     scaleSlider.set(d.length);
     unitsInfo.textContent = `${d.units} ${t("units")}`;
+    equation.innerHTML = `<span class="eq-r">r</span> = ${p.a.toFixed(2)}·e<sup>${p.b.toFixed(3)}θ</sup><span class="eq-sep"></span>θ ∈ [0, ${p.theta_max_pi.toFixed(1)}π]<span class="eq-sep"></span>${d.units} ${t("units")} · ${formatLength(d.length)}`;
   }
   syncChips();
 }
 
 // ---------------------------------------------------------------- physics wiring
-const pendingMesh = new Map<number, ReturnType<typeof baseLinkMesh>>();
+const pendingMesh = new Map<number, ReturnType<typeof renderLinkMesh>>();
 let rebuildTimer = 0;
 function rebuild(resetPose = false) {
   clearTimeout(rebuildTimer);
@@ -656,13 +702,14 @@ function rebuild(resetPose = false) {
     const r = store.resolved;
     if (!r.design) return;
     const seq = phys.build(r.params, ui.object, resetPose);
-    // same tessellation as the collision mesh, so what you see is what touches
-    pendingMesh.set(seq, baseLinkMesh(r.design, r.params, DEFAULT_TUNING.segments));
+    // the display mesh: same body as the collision mesh, with softened edges
+    pendingMesh.set(seq, renderLinkMesh(r.design, r.params, Math.max(48, DEFAULT_TUNING.segments)));
   }, 16);
 }
 
 phys.onReady = () => {
   loading.hidden = true;
+  setTimeout(() => loading.remove(), 700);
   rebuild(true);
 };
 phys.onBuilt = (meta: WorkerMeta) => {
@@ -789,7 +836,7 @@ function envBtn(): HTMLButtonElement {
     sync();
   }, "chip env-chip");
   const sync = () => {
-    b.textContent = env === "space" ? `≈ ${t("ocean")}` : `✦ ${t("space")}`;
+    b.replaceChildren(icon(env === "space" ? "wave" : "star"), el("span", { class: "chip-label" }, env === "space" ? t("ocean") : t("space")));
     b.title = env === "space" ? t("toOcean") : t("toSpace");
     for (const c of refChips.querySelectorAll<HTMLElement>('[data-ref="human"]')) c.textContent = env === "space" ? t("astronaut") : t("human");
   };
@@ -797,9 +844,14 @@ function envBtn(): HTMLButtonElement {
   return b;
 }
 
-/** Append a text label that hides on narrow screens (icon stays). */
-function labelled(b: HTMLButtonElement, text: string): HTMLButtonElement {
-  b.append(el("span", { class: "chip-label" }, ` ${text}`));
+function iconOnly(b: HTMLButtonElement, name: Parameters<typeof icon>[0]): HTMLButtonElement {
+  b.append(icon(name));
+  b.setAttribute("aria-label", b.title);
+  return b;
+}
+
+function iconLabel(b: HTMLButtonElement, name: Parameters<typeof icon>[0]): HTMLButtonElement {
+  b.prepend(icon(name));
   return b;
 }
 
@@ -847,6 +899,7 @@ const api = {
 syncShape();
 setMode(ui.mode);
 renderResults();
+installRangePainter();
 
 /**
  * The mark: a nautilus drawn from the robot's own law r = a·e^(bθ), with the

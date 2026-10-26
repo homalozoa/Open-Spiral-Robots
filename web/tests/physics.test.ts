@@ -2,7 +2,7 @@
 // and the scaling law (curl time ∝ length).
 import { beforeAll, describe, expect, it } from "vitest";
 import loadMujoco from "@mujoco/mujoco";
-import { baseLinkMesh, meshVolume } from "../src/core/linkMesh";
+import { baseLinkMesh, meshVolume, renderLinkMesh } from "../src/core/linkMesh";
 import { defaultParams, type Params } from "../src/core/params";
 import { scaleParams } from "../src/core/scaling";
 import { resolve } from "../src/core/state";
@@ -55,6 +55,14 @@ describe("procedural link mesh", () => {
   it("N-cable solid of revolution has positive volume", () => {
     const { params, design } = resolve({ ...defaultParams(), two_cable: false });
     expect(meshVolume(baseLinkMesh(design!, params))).toBeGreaterThan(1000);
+  });
+  it("display mesh (chamfered, bevelled) stays within a few % of the collision mesh", () => {
+    for (const two_cable of [true, false]) {
+      const { params, design } = resolve({ ...defaultParams(), two_cable });
+      const ratio = meshVolume(renderLinkMesh(design!, params)) / meshVolume(baseLinkMesh(design!, params));
+      expect(ratio).toBeGreaterThan(0.85);
+      expect(ratio).toBeLessThanOrEqual(1.0001);
+    }
   });
 });
 

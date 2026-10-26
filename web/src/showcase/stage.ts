@@ -14,15 +14,22 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { toCreasedNormals } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { makeBrightStars, makeInstrumentDisc, makePedestal, makePlanet, makeSkyDome, makeVignettePass } from "./scenery";
 import type { LinkMesh } from "../core/linkMesh";
 import type { ObjectKind } from "./physics";
 import type { Frame, WorkerMeta } from "./protocol";
 
 /** Tendon colours: coral, sea glass, kelp, sun, anemone, lagoon, urchin, slate. */
-export const TENDON_HEX = [0xff6b4a, 0x5fd3c4, 0x9bc53d, 0xffc145, 0xc77dff, 0x3fa7d6, 0xf26ca7, 0x93a1a8];
+export const TENDON_HEX = [0xffa45c, 0x7cc8ff, 0xb6e36a, 0xffd36e, 0xd29bff, 0x5fe0d0, 0xff8fc0, 0xc8ccd4];
 
-const NACRE = new THREE.Color(0xf1e7d8);
-const CORAL = new THREE.Color(0xff6b4a);
+/** Glazed porcelain body; joints glow amber as they bend. */
+const NACRE = new THREE.Color(0xe9e5dd);
+const CORAL = new THREE.Color(0xff9a4a);
 
 export type Quality = "high" | "medium" | "low";
 /** Where the robot is shown: deep space (default) or under water. */
@@ -75,12 +82,17 @@ export class Stage {
   private snow: THREE.Points | null = null;
   private snowUniforms = { uTime: { value: 0 }, uSize: { value: 2 }, uBox: { value: new THREE.Vector3(1, 1, 1) }, uOrigin: { value: new THREE.Vector3() } };
   private grabLine: Line2;
+  private composer: EffectComposer | null = null;
+  private bloom: UnrealBloomPass | null = null;
+  private sky = makeSkyDome();
+  private brightStars: THREE.Points | null = null;
+  private planet = makePlanet();
+  private disc: THREE.Group | null = null;
   env: Environment = "space";
   private hemi: THREE.HemisphereLight;
   private space = new THREE.Group();
   private stars: THREE.Points | null = null;
   private galaxy: THREE.Points | null = null;
-  private spaceGrid: THREE.Mesh | null = null;
   private shadowPlane: THREE.Mesh;
   private spiralB = 0.1764;
   private spaceUniforms = { uTime: { value: 0 }, uPx: { value: 1 } };
@@ -100,21 +112,23 @@ export class Stage {
   private slowWindows = 0;
   private frameStats = { slow: 0, fast: 0 };
   heat = true;
-  showEdges = true;
+  showEdges = false;
   showTrail = true;
   showTendons = true;
   /** rendered frames per second (0 when idle) */
   fps = 60;
   renders = 0;
   onQuality: ((q: Quality) => void) | null = null;
+  /** called after each rendered frame with metres per pixel at the focus */
+  onRender: ((metresPerPixel: number) => void) | null = null;
 
   constructor(readonly host: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setClearColor(0x000000, 1);
     host.appendChild(this.renderer.domElement);
     this.labels = document.createElement("div");
     this.labels.className = "stage-labels";
@@ -150,7 +164,10 @@ export class Stage {
     this.shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.35 }));
     this.shadowPlane.receiveShadow = true;
     this.space.add(this.shadowPlane);
-    this.scene.add(this.seabed, this.space, this.robot, this.ghosts, this.refs, this.mount);
+    this.scene.add(this.sky.mesh, this.seabed, this.space, this.robot, this.ghosts, this.refs, this.mount);
+    this.shadowPlane.visible = false;
+    this.brightStars = makeBrightStars(46, this.spaceUniforms);
+    this.space.add(this.brightStars, this.planet.group);
 
     this.trail = new Line2(new LineGeometry(), new LineMaterial({ linewidth: 2.5, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false }));
     this.trail.frustumCulled = false;
@@ -201,8 +218,13 @@ export class Stage {
         this.seabedUniforms.uTime.value = this.time;
         this.snowUniforms.uTime.value = this.time;
         this.spaceUniforms.uTime.value = this.time;
-        this.renderer.render(this.scene, this.camera);
+        this.draw();
         this.placeLabels();
+        if (this.onRender) {
+          const d = this.camera.position.distanceTo(this.controls.target);
+          const h = Math.max(1, this.host.clientHeight);
+          this.onRender((2 * d * Math.tan((this.camera.fov * Math.PI) / 360)) / h);
+        }
         this.renders++;
         frames++;
       }
@@ -218,6 +240,35 @@ export class Stage {
 
   invalidate(): void {
     this.dirty = true;
+  }
+
+  /** Render one frame (through the post-processing chain when enabled). */
+  draw(): void {
+    this.sky.uniforms.uTime.value = this.time;
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * HDR chain: multisampled half-float render → selective bloom (only the
+   * glowing joints, tendons, rings and stars exceed the threshold) → tone
+   * mapping and sRGB (OutputPass) → vignette.
+   */
+  private setupComposer(): void {
+    this.composer?.dispose();
+    this.composer = null;
+    this.bloom = null;
+    if (this.quality === "low") return;
+    const w = Math.max(1, this.host.clientWidth);
+    const h = Math.max(1, this.host.clientHeight);
+    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: this.quality === "high" ? 4 : 2 });
+    const c = new EffectComposer(this.renderer, rt);
+    c.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w / 2, h / 2), 0.42, 0.5, 1.0);
+    c.addPass(this.bloom);
+    c.addPass(new OutputPass());
+    c.addPass(makeVignettePass());
+    this.composer = c;
   }
 
   // ---------------------------------------------------------------- quality
@@ -242,6 +293,7 @@ export class Stage {
     }
     this.renderer.shadowMap.type = q === "high" ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     if (this.snow) this.snow.visible = q === "high" && this.env === "ocean";
+    this.setupComposer();
     this.seabedUniforms.uCausticAmp.value = q === "low" ? 0 : this.dark ? 0.16 : 0.14;
     // material swap: iridescent nacre only on the high tier
     if (this.meta && this.linkGeo) this.rebuildLinkMaterials();
@@ -271,6 +323,10 @@ export class Stage {
     const w = Math.max(1, this.host.clientWidth);
     const h = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(w, h, false);
+    if (this.composer) {
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.composer.setSize(w, h);
+    }
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
     this.camera.aspect = w / h;
@@ -308,15 +364,20 @@ export class Stage {
     this.space.visible = space;
     this.seabed.visible = !space;
     if (this.snow) this.snow.visible = !space && this.quality === "high";
+    if (this.disc) this.disc.visible = space;
+    this.planet.group.visible = space;
     if (space) {
       // no air, no water: hard sunlight, a dim blue bounce, no fog
+      this.sky.uniforms.uMode.value = 0;
+      if (this.bloom) this.bloom.threshold = 1.0;
       this.scene.fog = null;
       this.hemi.color.set(0x8fa8ff);
       this.hemi.groundColor.set(0x0b0d18);
       this.hemi.intensity = 0.55;
       this.sun.color.set(0xfff6e8);
-      this.sun.intensity = 3.2;
-      this.scene.environmentIntensity = 0.35;
+      this.sun.intensity = 2.3;
+      // a studio environment would light the dark floor grey; keep only a hint
+      this.scene.environmentIntensity = 0.12;
       this.invalidate();
       return;
     }
@@ -327,6 +388,12 @@ export class Stage {
     this.sun.intensity = 2.4;
     this.scene.environmentIntensity = 0.5;
     const water = new THREE.Color(this.dark ? WATER.dark : WATER.light);
+    const sk = this.sky.uniforms;
+    sk.uMode.value = 1;
+    sk.uTop.value.set(this.dark ? 0x2a7f88 : 0xe4f6f1);
+    sk.uHorizon.value.copy(water);
+    sk.uDeep.value.set(this.dark ? 0x02090d : 0xcfc2a2);
+    if (this.bloom) this.bloom.threshold = this.dark ? 0.95 : 1.25;
     // linear fog that follows the camera distance (see updateFog): the robot
     // stays crisp, the far seabed melts into the water
     this.scene.fog = new THREE.Fog(water, 1, 10);
@@ -541,65 +608,34 @@ export class Stage {
    * dome: the galaxy always hangs behind the robot, up and to the right.
    */
   private placeSky(): void {
-    if (this.env !== "space") return;
     const d = this.camera.position.distanceTo(this.controls.target) || 1;
     const R = d * 20;
-    if (this.camera.far < R * 1.3) {
-      this.camera.far = R * 1.3;
+    if (this.camera.far < R * 1.5) {
+      this.camera.far = R * 1.5;
       this.camera.updateProjectionMatrix();
     }
+    this.sky.mesh.position.copy(this.camera.position);
+    this.sky.mesh.scale.setScalar(R * 1.1);
     if (this.stars) {
       this.stars.position.copy(this.camera.position);
       this.stars.scale.setScalar(R);
     }
-    if (this.galaxy) {
-      // up and to the right of the robot in the default view; fixed in the
-      // world, so it drifts naturally when the camera is orbited
-      const dir = new THREE.Vector3(-0.12, 1, -0.2).normalize();
-      this.galaxy.position.copy(this.camera.position).addScaledVector(dir, R * 0.8);
-      this.galaxy.scale.setScalar(R * 0.22);
+    if (this.brightStars) {
+      this.brightStars.position.copy(this.camera.position);
+      this.brightStars.scale.setScalar(R);
     }
-  }
-
-  /** A faint holographic floor grid so sizes stay readable without a ground. */
-  private makeSpaceGrid(L: number): void {
-    this.disposePoints(this.spaceGrid);
-    const step = 10 ** Math.floor(Math.log10(L / 4));
-    const mat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      uniforms: {
-        uStep: { value: step },
-        uCenter: { value: new THREE.Vector2(L * 0.5, 0) },
-        uFade: { value: L * 2.4 },
-      },
-      vertexShader: `
-        varying vec2 vW;
-        void main() {
-          vec4 w = modelMatrix * vec4(position, 1.0);
-          vW = w.xy;
-          gl_Position = projectionMatrix * viewMatrix * w;
-        }`,
-      fragmentShader: `
-        uniform float uStep, uFade; uniform vec2 uCenter;
-        varying vec2 vW;
-        float lines(vec2 p, float s) {
-          vec2 g = abs(fract(p / s - 0.5) - 0.5) / fwidth(p / s);
-          return 1.0 - min(min(g.x, g.y), 1.0);
-        }
-        void main() {
-          float a = max(lines(vW, uStep) * 0.3, lines(vW, uStep * 10.0));
-          float fade = 1.0 - smoothstep(uFade * 0.2, uFade, length(vW - uCenter));
-          a *= fade * 0.5;
-          if (a < 0.004) discard;
-          gl_FragColor = vec4(0.45, 0.85, 1.0, a);
-        }`,
-    });
-    this.spaceGrid = new THREE.Mesh(new THREE.PlaneGeometry(L * 12, L * 12), mat);
-    this.spaceGrid.position.set(L * 0.5, 0, L * 1e-4);
-    this.space.add(this.spaceGrid);
-    this.shadowPlane.scale.setScalar(L * 8);
-    this.shadowPlane.position.set(L * 0.5, 0, 0);
+    // a planet low on the right, its lit limb arcing behind the robot
+    // lit from behind and above-left: mostly night side with a thin bright crescent
+    this.planet.group.position.copy(this.camera.position).addScaledVector(skyDir(1.25, -1.45), R * 0.75);
+    this.planet.group.scale.setScalar(R * 0.24);
+    const toCam = this.camera.position.clone().sub(this.planet.group.position).normalize();
+    this.planet.uniforms.uSun.value.copy(toCam).multiplyScalar(-0.9).add(new THREE.Vector3(-0.35, 0, 0.6).normalize().multiplyScalar(0.45)).normalize();
+    if (this.galaxy) {
+      // upper right of the default view; fixed in the world, so it drifts
+      // naturally when the camera is orbited
+      this.galaxy.position.copy(this.camera.position).addScaledVector(skyDir(0.62, 0.42), R * 0.8);
+      this.galaxy.scale.setScalar(R * 0.16);
+    }
   }
 
   private makeSnow(L: number): void {
@@ -657,11 +693,13 @@ export class Stage {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(mesh.vertices, 3));
     geo.setIndex(new THREE.BufferAttribute(mesh.triangles, 1));
-    geo.computeVertexNormals();
+    // smooth across the bevels, crisp at real edges
+    const smooth = toCreasedNormals(geo, Math.PI / 5);
+    geo.dispose();
     this.linkGeo?.dispose();
     this.edgeGeo?.dispose();
-    this.linkGeo = geo;
-    this.edgeGeo = new THREE.EdgesGeometry(geo, 28);
+    this.linkGeo = smooth;
+    this.edgeGeo = new THREE.EdgesGeometry(smooth, 28);
     this.rebuildLinkMaterials();
     for (const t of this.tendons) {
       t.geometry.dispose();
@@ -669,7 +707,8 @@ export class Stage {
       this.scene.remove(t);
     }
     this.tendons = Array.from({ length: meta.nu }, (_, i) => {
-      const l = new Line2(new LineGeometry(), new LineMaterial({ color: TENDON_HEX[i % TENDON_HEX.length], linewidth: 2, transparent: true, opacity: 0.95 }));
+      // HDR colour so the cables glow through the bloom pass
+      const l = new Line2(new LineGeometry(), new LineMaterial({ color: new THREE.Color(TENDON_HEX[i % TENDON_HEX.length]).multiplyScalar(2.2), linewidth: 1.6, transparent: true, opacity: 0.95 }));
       l.frustumCulled = false;
       (l.material as LineMaterial).resolution.set(this.host.clientWidth, this.host.clientHeight);
       l.userData.n = 0;
@@ -694,17 +733,17 @@ export class Stage {
       const mat = high
         ? new THREE.MeshPhysicalMaterial({
             color: NACRE,
-            roughness: 0.32,
+            roughness: 0.36,
             metalness: 0,
-            clearcoat: 0.7,
-            clearcoatRoughness: 0.25,
-            iridescence: 0.55,
-            iridescenceIOR: 1.6,
-            iridescenceThicknessRange: [180, 520],
+            clearcoat: 0.55,
+            clearcoatRoughness: 0.18,
+            sheen: 0.35,
+            sheenRoughness: 0.5,
+            sheenColor: new THREE.Color(0xffffff),
+            specularIntensity: 0.6,
             side: THREE.DoubleSide,
-            flatShading: true,
           })
-        : new THREE.MeshStandardMaterial({ color: NACRE, roughness: 0.4, metalness: 0, side: THREE.DoubleSide, flatShading: true });
+        : new THREE.MeshStandardMaterial({ color: NACRE, roughness: 0.4, metalness: 0, side: THREE.DoubleSide });
       const link = new THREE.Mesh(geo, mat);
       link.castShadow = this.quality !== "low";
       link.receiveShadow = this.quality !== "low";
@@ -729,30 +768,23 @@ export class Stage {
     this.makeStars(L);
     this.makeGalaxy(L);
     this.placeSky();
-    this.makeSpaceGrid(L);
-
-    // a weathered stone post holds the base
-    this.mount.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
-    this.mount.clear();
-    // a weathered stone post under water, a brushed-metal mast in space
-    const stone =
-      this.env === "space"
-        ? new THREE.MeshStandardMaterial({ color: 0x8b929c, roughness: 0.35, metalness: 0.85 })
-        : new THREE.MeshStandardMaterial({ color: 0x4a5452, roughness: 0.85, metalness: 0.05 });
-    const bs = Math.max(L * 0.1, 0.004);
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(bs * 0.14, bs * 1.6, bs * 1.6), stone);
-    plate.position.set(meta.mount[0] - bs * 0.07, meta.mount[1], meta.mount[2]);
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(bs * 0.28, bs * 0.38, meta.mount[2], 12), stone);
-    post.rotation.x = Math.PI / 2;
-    post.position.set(meta.mount[0] - bs * 0.35, meta.mount[1], meta.mount[2] / 2);
-    const foot = new THREE.Mesh(new THREE.CylinderGeometry(bs * 0.8, bs * 0.95, bs * 0.18, 16), stone);
-    foot.rotation.x = Math.PI / 2;
-    foot.position.set(meta.mount[0] - bs * 0.35, meta.mount[1], bs * 0.09);
-    for (const m of [plate, post, foot]) {
-      m.castShadow = true;
-      m.receiveShadow = true;
-      this.mount.add(m);
+    if (this.disc) {
+      this.disc.traverse((o) => {
+        (o as THREE.Mesh).geometry?.dispose();
+        ((o as THREE.Mesh).material as THREE.Material | undefined)?.dispose();
+      });
+      this.space.remove(this.disc);
     }
+    this.disc = makeInstrumentDisc(L);
+    this.space.add(this.disc);
+
+    this.mount.traverse((o) => {
+      (o as THREE.Mesh).geometry?.dispose();
+      ((o as THREE.Mesh).material as THREE.Material | undefined)?.dispose();
+    });
+    this.mount.clear();
+    const bs = Math.max(L * 0.1, 0.004);
+    this.mount.add(makePedestal(meta.mount, bs, this.env === "space" ? 3 : 1.6));
 
     this.sun.position.set(meta.mount[0] + L * 0.4, -L * 0.8, L * 2.4);
     this.sun.target.position.set(L * 0.5, 0, 0);
@@ -786,11 +818,15 @@ export class Stage {
     this.linkMats.forEach((m, i) => {
       if (!this.heat || !bends) {
         m.color.copy(NACRE);
+        m.emissive.setRGB(0, 0, 0);
         return;
       }
+      // bending warms the porcelain and lights it from within (blooms)
       const b = i === 0 ? 0 : Math.abs(bends[i - 1] ?? 0);
       const t = Math.min(1, b / lim);
-      m.color.copy(NACRE).lerp(CORAL, t * t * (3 - 2 * t) * 0.85);
+      const k = t * t * (3 - 2 * t);
+      m.color.copy(NACRE).lerp(CORAL, k * 0.3);
+      m.emissive.copy(CORAL).multiplyScalar(k * 0.55);
     });
   }
 
@@ -1131,7 +1167,7 @@ export class Stage {
 
   /** PNG of the current view (rendered now, read before the buffer is presented). */
   screenshot(): Promise<Blob> {
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
     return new Promise((res, rej) => this.renderer.domElement.toBlob((b) => (b ? res(b) : rej(new Error("toBlob"))), "image/png"));
   }
 
@@ -1177,4 +1213,17 @@ function humanSilhouette(): THREE.ExtrudeGeometry {
   const head = new THREE.Shape();
   head.absarc(0, 1.645, 0.105, 0, Math.PI * 2, false);
   return new THREE.ExtrudeGeometry([body, head], { depth: 0.015, bevelEnabled: true, bevelSize: 0.004, bevelThickness: 0.004, bevelSegments: 2, curveSegments: 32 });
+}
+
+/**
+ * A world direction that appears at (sx, sy) in the default framing, in
+ * units of the half-field of view (1 = screen edge). The default camera looks
+ * along -(0.16, -1, 0.26) with a 32° vertical field.
+ */
+function skyDir(sx: number, sy: number): THREE.Vector3 {
+  const f = new THREE.Vector3(-0.16, 1, -0.26).normalize();
+  const r = new THREE.Vector3().crossVectors(f, new THREE.Vector3(0, 0, 1)).normalize();
+  const u = new THREE.Vector3().crossVectors(r, f).normalize();
+  const tv = Math.tan((16 * Math.PI) / 180);
+  return f.addScaledVector(r, sx * tv * 1.6).addScaledVector(u, sy * tv).normalize();
 }

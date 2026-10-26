@@ -13,7 +13,7 @@
   --err: #c0392b;
   --track: rgba(16, 38, 44, 0.12);
   --input: rgba(16, 38, 44, 0.05);
-  --mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -57,10 +57,10 @@ html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 13px/1.45 "Avenir Next", "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font: 13px/1.45 "Inter Variable", "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 #app { display: flex; flex-direction: column; height: 100vh; }
-h2 { font: italic 500 15px/1.2 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Songti SC", serif; color: var(--fg); text-align: center; margin: 6px 0 8px; }
+h2 { font: italic 400 20px/1.1 "Instrument Serif", Georgia, "Songti SC", serif; color: var(--fg); text-align: center; margin: 8px 0 10px; }
 h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
 h4 { font-size: 12px; margin: 10px 0 4px; color: var(--muted); }
 code, .mono { font-family: var(--mono); font-size: 12px; }
@@ -70,10 +70,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 /* top bar */
 .topbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 14px 20px; background: transparent; border-bottom: 1px solid var(--border);
 }
 .brand { font-size: 15px; }
-.brand strong { font: 600 19px "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Songti SC", serif; }
+.brand strong { font: italic 400 26px "Instrument Serif", Georgia, "Songti SC", serif; font-weight: 400; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .status-wrap { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); min-height: 20px; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
@@ -81,14 +81,14 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 
 /* buttons */
 .btn {
-  font: inherit; color: var(--fg); background: var(--input); border: 1px solid var(--border);
-  border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+  font: 500 12px/1 inherit; font-family: inherit; color: var(--fg); background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: 8px 14px; cursor: pointer; white-space: nowrap; transition: background .2s, border-color .2s;
 }
-.btn:hover { border-color: var(--accent); }
+.btn:hover { background: var(--input); border-color: var(--muted); }
 .btn:focus-visible, .tab:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.btn.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); }
-.btn.blue { background: var(--accent-soft); }
-.btn.green { background: var(--green-soft); }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: transparent; }
+.btn.blue { border-color: var(--muted); }
+.btn.green { border-color: var(--muted); }
 .btn.block { display: block; width: 100%; margin-top: 6px; }
 .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
 .btn.small { padding: 2px 8px; font-size: 12px; }
@@ -99,7 +99,7 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
   flex: 1; min-height: 0; display: grid; gap: 8px; padding: 8px;
   grid-template-columns: minmax(280px, 4fr) minmax(320px, 4fr) minmax(300px, 2.4fr);
 }
-.col { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.col { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .col-sketch { padding: 6px; }
 .plot { flex: 3 1 0; min-height: 160px; position: relative; overflow: hidden; }
 .plot svg { position: absolute; inset: 0; display: block; }

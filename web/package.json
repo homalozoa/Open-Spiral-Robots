@@ -42,6 +42,9 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource/instrument-serif": "5.3.0",
     "@mujoco/mujoco": "3.15.0",
     "@types/node": "22.20.5",
     "@types/three": "0.180.0",
