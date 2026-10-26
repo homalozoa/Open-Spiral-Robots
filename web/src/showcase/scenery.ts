@@ -203,7 +203,7 @@ export function makeInstrumentDisc(L: number): THREE.Group {
   const R = L * 1.7;
   const step = 10 ** Math.floor(Math.log10(L / 3));
   // dark polished stone that dissolves into space toward its edge
-  const mat = new THREE.MeshPhysicalMaterial({ color: 0x06070a, metalness: 0.35, roughness: 0.6, clearcoat: 0.7, clearcoatRoughness: 0.14, transparent: true });
+  const mat = new THREE.MeshPhysicalMaterial({ color: 0x06070a, metalness: 0.2, roughness: 0.75, clearcoat: 0.3, clearcoatRoughness: 0.5, transparent: true });
   const u = { uStep: { value: step }, uR: { value: R }, uCenter: { value: new THREE.Vector2(L * 0.5, 0) } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);

@@ -724,6 +724,9 @@ export class Stage {
     const meta = this.meta!;
     const geo = this.linkGeo!;
     for (const m of this.linkMats) m.dispose();
+    // keep the current pose: a quality switch on a resting robot gets no new
+    // frame, and new links would otherwise sit at the origin
+    const prev = this.links.map((l) => [l.position.clone(), l.quaternion.clone()] as const);
     this.robot.clear();
     this.links = [];
     this.linkMats = [];
@@ -752,6 +755,11 @@ export class Stage {
       e.visible = this.showEdges && this.quality !== "low";
       link.add(e);
       link.userData.index = this.links.length;
+      const was = prev.length === meta.linkScale.length ? prev[this.links.length] : null;
+      if (was) {
+        link.position.copy(was[0]);
+        link.quaternion.copy(was[1]);
+      }
       this.robot.add(link);
       this.links.push(link);
       this.linkMats.push(mat);

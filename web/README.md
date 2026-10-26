@@ -5,6 +5,11 @@ Everything runs client-side: 2D geometry in TypeScript, CAD on OpenCascade (WebA
 via [replicad](https://replicad.xyz)), and simulation on the official
 [MuJoCo WebAssembly build](https://github.com/google-deepmind/mujoco/tree/main/wasm).
 
+**[Watch the one-minute tour (docs/promo.mp4)](docs/promo.mp4)**: curling, grasping,
+a strike and its slow-motion replay, millimetres to metres, the ocean scene and
+the CAD drawer, all recorded from the app itself. `scripts/promo/` re-records it
+(see the header of `capture.mjs`).
+
 ## What it shows
 
 The page opens on a full-screen, always-running MuJoCo simulation of the robot.

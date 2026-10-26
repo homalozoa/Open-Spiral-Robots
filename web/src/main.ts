@@ -260,7 +260,12 @@ function setObject(kind: ObjectKind) {
   ui.object.pos = [L * 0.62, 0, (meta?.mount[2] ?? 0.62 * L) + L * (0.1 + ui.object.size / 2)];
   grasping = false;
   graspBtn.textContent = t("grasp");
-  rebuild();
+  // the object appears where the straight chain is free: start from a relaxed,
+  // straight pose so a curled body never spawns inside it
+  stopAuto();
+  joy.set(0, 0);
+  setDirection(0, 0);
+  rebuild(true);
   syncChips();
 }
 
@@ -716,6 +721,12 @@ phys.onBuilt = (meta: WorkerMeta) => {
   const mesh = pendingMesh.get(meta.seq);
   for (const k of [...pendingMesh.keys()]) if (k <= meta.seq) pendingMesh.delete(k);
   if (mesh) stage.setRobot(meta, mesh);
+  // a new model starts a new recording: a replayed or scrubbed time no longer
+  // exists, so show the live pose again (the new links would sit at the origin)
+  if (ui.replayT !== null) {
+    stopReplay();
+    ui.replayT = null;
+  }
   stage.setObject(ui.object.kind, ui.object.size * meta.lengthM, ui.object.pos, meta.lengthM);
   joy.setCables(meta.tendonAngles, meta.hinge);
   hudItems.get("mass")!.textContent = formatMass(meta.totalMass);
