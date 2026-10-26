@@ -15,6 +15,11 @@ let pendingBuild: Extract<ToWorker, { type: "build" }> | null = null;
 let lastWall = performance.now();
 let realtime = 0;
 let epoch = 0;
+// idle handling: once the robot has been at rest for a while, stop stepping
+// and slow the loop down; any message wakes it up again
+let restSince = 0;
+let timer = 0;
+const IDLE_AFTER_MS = 600;
 
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
 
@@ -81,21 +86,33 @@ function tick() {
       pendingBuild = null;
       doBuild(b);
     }
-    if (running && ph.ready) {
+    const idle = restSince > 0 && now - restSince > IDLE_AFTER_MS;
+    if (running && ph.ready && !idle) {
       const advanced = ph.advance(wall * speed, 9);
       realtime = wall > 0 ? advanced / wall : 0;
+      if (ph.isResting()) restSince ||= now;
+      else restSince = 0;
     } else {
-      realtime = 0;
+      realtime = idle ? speed : 0;
     }
     sendFrame();
   } catch (e) {
     post({ type: "error", message: (e as Error).message ?? String(e) });
   }
-  setTimeout(tick, Math.max(0, 14 - (performance.now() - now)));
+  const idle = restSince > 0 && performance.now() - restSince > IDLE_AFTER_MS;
+  timer = self.setTimeout(tick, idle ? 250 : Math.max(0, 14 - (performance.now() - now)));
+}
+
+function wake() {
+  restSince = 0;
+  clearTimeout(timer);
+  lastWall = performance.now();
+  timer = self.setTimeout(tick, 0);
 }
 
 self.onmessage = (ev: MessageEvent<ToWorker>) => {
   const m = ev.data;
+  if (m.type !== "poses" && m.type !== "series" && restSince > 0) wake();
   try {
     switch (m.type) {
       case "build":
@@ -115,8 +132,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
       case "strike": {
         ph.resetPose();
         epoch++;
-        const a = ph.activationFromVector(0, m.a);
-        ph.setActivation(a);
+        ph.snapActivation(ph.activationFromVector(0, m.a));
         running = true;
         break;
       }

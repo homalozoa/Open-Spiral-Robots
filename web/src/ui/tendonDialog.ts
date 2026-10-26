@@ -4,7 +4,8 @@
 import { DEFAULT_TENDON, type TendonConfig } from "../core/params";
 import { el } from "./controls";
 
-export const TENDON_COLORS = ["#e63333", "#3399e6", "#33b847", "#f29e1a", "#9e42d9", "#1ab8b3", "#e052ad", "#737373"];
+// same order as the showcase stage (coral, sea glass, kelp, sun, anemone, lagoon, urchin, slate)
+export const TENDON_COLORS = ["#ff6b4a", "#5fd3c4", "#9bc53d", "#ffc145", "#c77dff", "#3fa7d6", "#f26ca7", "#93a1a8"];
 
 function sectionSvg(n: number, current: number): SVGSVGElement {
   const NS = "http://www.w3.org/2000/svg";

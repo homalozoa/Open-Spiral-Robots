@@ -40,6 +40,10 @@ export interface SceneExtras {
   rootPos?: [number, number, number];
   rootQuat?: [number, number, number, number];
   timestep?: number;
+  /** extra attributes for <option> (e.g. integrator="implicitfast") */
+  optionAttrs?: string;
+  /** <flag> attributes inside <option> (e.g. multiccd="enable") */
+  optionFlags?: string;
   /** extra top-level lines right after <compiler> (e.g. <default>) */
   head?: string[];
   /** extra lines inside <asset> and <worldbody> */
@@ -146,7 +150,8 @@ export function generateMujocoXml(o: MujocoXmlOptions): string {
   const gvec = gravity === 0 ? "0 0 0" : `0 0 ${fmtG(-gravity, 9)}`;
   const sc = o.scene;
   if (sc?.head) lines.push(...sc.head.map((l) => `  ${l}`));
-  lines.push(`  <option gravity="${gvec}"${sc?.timestep ? ` timestep="${fmtG(sc.timestep, 6)}"` : ""}/>`);
+  const optHead = `  <option gravity="${gvec}"${sc?.timestep ? ` timestep="${fmtG(sc.timestep, 6)}"` : ""}${sc?.optionAttrs ? ` ${sc.optionAttrs}` : ""}`;
+  lines.push(sc?.optionFlags ? `${optHead}><flag ${sc.optionFlags}/></option>` : `${optHead}/>`);
   lines.push("  <asset>");
   lines.push(...meshes);
   if (sc?.asset) lines.push(...sc.asset.map((l) => `    ${l}`));

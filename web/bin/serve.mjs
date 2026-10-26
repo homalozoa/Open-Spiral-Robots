@@ -3,7 +3,8 @@
 // No dependencies; sends the COOP/COEP headers that SharedArrayBuffer
 // (multi-threaded WASM) needs, and the right MIME type for .wasm.
 import { createServer } from "node:http";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,6 +36,9 @@ const TYPES = {
   ".map": "application/json",
 };
 
+const COMPRESSIBLE = new Set([".html", ".js", ".mjs", ".css", ".json", ".wasm", ".svg", ".map"]);
+const gzCache = new Map();
+
 createServer((req, res) => {
   let path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
   if (path.endsWith("/")) path += "index.html";
@@ -47,12 +51,26 @@ createServer((req, res) => {
     res.writeHead(404, { "Content-Type": "text/plain" }).end("not found");
     return;
   }
-  res.writeHead(200, {
-    "Content-Type": TYPES[extname(file)] ?? "application/octet-stream",
+  const type = TYPES[extname(file)] ?? "application/octet-stream";
+  const headers = {
+    "Content-Type": type,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cache-Control": path.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
-  });
+    Vary: "Accept-Encoding",
+  };
+  // the WebAssembly and JS bundles shrink 3-4x with gzip: compress once, keep in memory
+  if (COMPRESSIBLE.has(extname(file)) && /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""))) {
+    let gz = gzCache.get(file);
+    if (!gz) {
+      gz = gzipSync(readFileSync(file), { level: 6 });
+      gzCache.set(file, gz);
+    }
+    res.writeHead(200, { ...headers, "Content-Encoding": "gzip", "Content-Length": gz.length });
+    res.end(gz);
+    return;
+  }
+  res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }).listen(port, host, () => {
   console.log(`OpenSpiRobs web: http://${host === "0.0.0.0" ? "localhost" : host}:${port}/`);

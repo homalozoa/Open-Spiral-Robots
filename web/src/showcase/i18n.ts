@@ -2,7 +2,7 @@
 // desktop tool).
 
 const zh = {
-  tagline: "对数螺旋软体机器人",
+  tagline: "对数螺旋软体机器人 · 灵感来自鹦鹉螺与章鱼腕",
   modeFlex: "灵活性",
   modeSpeed: "速度",
   modeScale: "尺度",
@@ -61,7 +61,7 @@ const zh = {
   refs: "参照物",
   coin: "硬币",
   hand: "手掌",
-  human: "人",
+  human: "潜水员",
   law: "尺度定律",
   lawText: "卷曲用时 ∝ 长度；尖端峰值速度几乎与尺寸无关",
   measureHere: "在此尺寸测速",
@@ -72,12 +72,19 @@ const zh = {
   edges: "棱线",
   tendons: "线缆",
   fit: "取景",
+  collapse: "收起",
+  expand: "展开控制",
+  quality: "画质",
+  auto: "自动",
+  high: "高",
+  medium: "中",
+  low: "低",
 } as const;
 
 export type Key = keyof typeof zh;
 
 const en: Record<Key, string> = {
-  tagline: "Logarithmic-spiral soft robots",
+  tagline: "Logarithmic-spiral soft robots, after the nautilus and the octopus arm",
   modeFlex: "Flexibility",
   modeSpeed: "Speed",
   modeScale: "Scale",
@@ -136,7 +143,7 @@ const en: Record<Key, string> = {
   refs: "References",
   coin: "Coin",
   hand: "Hand",
-  human: "Person",
+  human: "Diver",
   law: "Scaling law",
   lawText: "Curl time ∝ length; peak tip speed is almost size-independent",
   measureHere: "Measure at this size",
@@ -147,6 +154,13 @@ const en: Record<Key, string> = {
   edges: "Edges",
   tendons: "Cables",
   fit: "Fit",
+  collapse: "Hide",
+  expand: "Controls",
+  quality: "Quality",
+  auto: "Auto",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
 };
 
 let lang: "zh" | "en" = (() => {

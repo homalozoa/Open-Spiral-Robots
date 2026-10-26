@@ -26,7 +26,7 @@ function physicsFor(p: Partial<Params>, scale = 1) {
 
 /** time until the curl angle first reaches 90% of its peak */
 function curlTime(ph: Physics, horizon: number): { t90: number; peak: number; vmax: number } {
-  ph.setActivation([1, 0]);
+  ph.snapActivation([1, 0]);
   let t = 0;
   while (t < horizon) t += ph.advance(horizon / 200, 1e9);
   const r = ph.rec;
@@ -73,7 +73,7 @@ describe("live physics", () => {
 
   it("keeps the motion through a shape rebuild", () => {
     const { ph } = physicsFor({});
-    ph.setActivation([1, 0]);
+    ph.snapActivation([1, 0]);
     ph.advance(0.3, 1e9);
     const q = Float64Array.from(ph.data!.qpos as Float64Array);
     const r = resolve({ ...defaultParams(), p: 0.45 });

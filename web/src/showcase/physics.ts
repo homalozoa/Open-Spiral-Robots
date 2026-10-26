@@ -133,7 +133,56 @@ export class Recorder {
   }
 }
 
+/** Contact / integration settings of the live model (tuned in tests/contact.test.ts). */
+export interface Tuning {
+  selfCollision: boolean;
+  /** MuJoCo solref (timeconst, dampratio) in reference-size seconds */
+  solref: [number, number];
+  solimp: [number, number, number, number, number];
+  /** contact margin of the links, as a fraction of the robot length */
+  margin: number;
+  /**
+   * contact margin of the scene object (fraction of the robot length): fast
+   * links are caught a step before they reach it instead of tunnelling.
+   */
+  objectMargin: number;
+  /** angular segments of the N-cable link mesh (render and collision) */
+  segments: number;
+  /** timestep divisor relative to the 2 ms reference step */
+  substeps: number;
+  optionAttrs: string;
+  optionFlags: string;
+  /** joint armature (rotor inertia) in reference-size kg·m² */
+  armature: number;
+}
+
+/**
+ * Chosen with tests/contact.test.ts: stiff contacts on a half step plus a
+ * little joint armature keep links out of grasped objects (≈1 mm worst case
+ * during fast motion, 0 at rest; it was 20-30 mm with MuJoCo's defaults),
+ * with the free curl, curl time and tip speed unchanged.
+ */
+export const DEFAULT_TUNING: Tuning = {
+  selfCollision: true,
+  solref: [0.002, 1],
+  solimp: [0.99, 0.999, 0.0005, 0.5, 2],
+  margin: 0,
+  objectMargin: 0.004,
+  segments: 24,
+  substeps: 2,
+  optionAttrs: "",
+  optionFlags: "",
+  // A touch of rotor inertia keeps the tiny tip link from chattering against
+  // objects under full tendon pull (it caused the remaining ~5 mm clipping);
+  // it changes the curl time and tip speed by under 1%.
+  armature: 1e-6,
+};
+
+/** time (reference-size seconds) for a tendon to go from slack to full pull */
+export const TENDON_RAMP = 0.35;
+
 export class Physics {
+  tuning: Tuning = { ...DEFAULT_TUNING };
   mj: MainModule | null = null;
   model: MjModel | null = null;
   data: MjData | null = null;
@@ -142,7 +191,9 @@ export class Physics {
   private vfs: MjVFS | null = null;
   meta: Meta | null = null;
   linkMesh: LinkMesh | null = null;
+  /** current (slewed) and requested tendon activation, 0..1 */
   activation: number[] = [];
+  target: number[] = [];
   readonly rec = new Recorder();
   private prevTip: [number, number, number] | null = null;
   tipSpeed = 0;
@@ -167,20 +218,23 @@ export class Physics {
     if (!mj) throw new Error("MuJoCo not loaded");
     const t0 = performance.now();
     const { params: p, design: d, object } = spec;
+    const tu = this.tuning;
     const L = d.length / 1000;
     const lam = L / 0.464;
     const mountU: [number, number, number] = [0, 0, (0.62 * L) / lam];
     const n = cableCount(p);
     const objectLines: string[] = [];
     if (object.kind !== "none") {
+      const om = tu.objectMargin * 0.464;
       const s = Math.max(1e-4, (object.size * L) / lam);
+      const mAttr = ` margin="${om.toPrecision(6)}"`;
       const pos = object.pos.map((v) => (v / lam).toFixed(6)).join(" ");
       const geom =
         object.kind === "cylinder"
-          ? `<geom type="cylinder" size="${(s / 2).toFixed(6)} ${((0.3 * L) / lam).toFixed(6)}" quat="0.70710678 -0.70710678 0 0" rgba=".95 .78 .3 1"/>`
+          ? `<geom type="cylinder" size="${(s / 2).toFixed(6)} ${((0.3 * L) / lam).toFixed(6)}" quat="0.70710678 -0.70710678 0 0" rgba=".95 .78 .3 1"${mAttr}/>`
           : object.kind === "sphere"
-            ? `<geom type="sphere" size="${(s / 2).toFixed(6)}" rgba=".95 .78 .3 1"/>`
-            : `<geom type="box" size="${(s / 2).toFixed(6)} ${(s / 2).toFixed(6)} ${(s / 2).toFixed(6)}" rgba=".95 .78 .3 1"/>`;
+            ? `<geom type="sphere" size="${(s / 2).toFixed(6)}" rgba=".95 .78 .3 1"${mAttr}/>`
+            : `<geom type="box" size="${(s / 2).toFixed(6)} ${(s / 2).toFixed(6)} ${(s / 2).toFixed(6)}" rgba=".95 .78 .3 1"${mAttr}/>`;
       objectLines.push(`<body name="object" mocap="true" pos="${pos}">${geom}</body>`);
     }
     const unitH = baseUnitHeight(d) / lam;
@@ -204,16 +258,19 @@ export class Physics {
       bendDirDeg: p.bend_dir_deg,
       tendonConfigs: (p.tendon_configs ?? []).map((c) => ({ ...c, gear: c.gear / lam ** 2 })),
       scene: {
+        head: [
+          `<default><geom solref="${tu.solref.join(" ")}" solimp="${tu.solimp.join(" ")}" margin="${(tu.margin * 0.464).toPrecision(6)}"/>${tu.armature ? `<joint armature="${tu.armature}"/>` : ""}</default>`,
+        ],
+        optionAttrs: tu.optionAttrs,
+        optionFlags: tu.optionFlags,
         rootPos: mountU,
         rootQuat: ROOT_QUAT,
-        timestep: timestepFor(d.length) / lam,
+        timestep: timestepFor(d.length) / lam / tu.substeps,
         worldbody: objectLines,
-        // links touch the ground and objects but not each other (joint limits
-        // already bound the curl); this keeps contact search cheap
-        linkContact: [2, 1],
+        linkContact: tu.selfCollision ? [1, 1] : [2, 1],
       },
     });
-    const mesh = baseLinkMesh(d, p, 16);
+    const mesh = baseLinkMesh(d, p, tu.segments);
     for (let i = 0; i < mesh.vertices.length; i++) mesh.vertices[i] /= lam;
     const stl = meshToBinarySTL([mesh]);
 
@@ -287,6 +344,7 @@ export class Physics {
       tendonAngles: Array.from({ length: n }, (_, k) => 90 + (k * 360) / n),
     };
     if (this.activation.length !== model.nu) this.activation = new Array(model.nu).fill(0);
+    if (this.target.length !== model.nu) this.target = [...this.activation];
     this.applyCtrl();
     mj.mj_forward(model, data);
     this.rec.reset(model.nq);
@@ -304,10 +362,46 @@ export class Physics {
     this.vfs = null;
   }
 
-  /** activation 0..1 per tendon; a pull is the negative end of ctrlrange. */
+  /**
+   * Requested activation 0..1 per tendon; a pull is the negative end of
+   * ctrlrange. The tendon follows within TENDON_RAMP, like a real motor, which
+   * also keeps the robot from whipping through objects.
+   */
   setActivation(a: number[]): void {
-    this.activation = a.map((v) => Math.max(0, Math.min(1, v)));
+    this.target = a.map((v) => Math.max(0, Math.min(1, v)));
+  }
+
+  /** True when nothing moves and nothing will: tendons settled, no grab. */
+  isResting(): boolean {
+    const d = this.data;
+    const meta = this.meta;
+    if (!d || !meta || this.grab) return false;
+    for (let i = 0; i < meta.nu; i++) if ((this.activation[i] ?? 0) !== (this.target[i] ?? 0)) return false;
+    const qv = d.qvel as Float64Array;
+    for (let i = 0; i < qv.length; i++) if (Math.abs(qv[i]) > 2e-3) return false;
+    return true;
+  }
+
+  /** Apply an activation instantly (the Speed mode's strike). */
+  snapActivation(a: number[]): void {
+    this.setActivation(a);
+    this.activation = [...this.target];
     this.applyCtrl();
+  }
+
+  private slew(): void {
+    const meta = this.meta!;
+    const step = meta.timestepU / TENDON_RAMP;
+    let changed = false;
+    for (let i = 0; i < meta.nu; i++) {
+      const a = this.activation[i] ?? 0;
+      const t = this.target[i] ?? 0;
+      if (a !== t) {
+        this.activation[i] = t > a ? Math.min(t, a + step) : Math.max(t, a - step);
+        changed = true;
+      }
+    }
+    if (changed) this.applyCtrl();
   }
 
   private applyCtrl(): void {
@@ -429,6 +523,7 @@ export class Physics {
     const t0 = performance.now();
     let done = 0;
     for (; done < want; done++) {
+      this.slew();
       this.applyGrab();
       mj.mj_step(m, d);
       this.sample();

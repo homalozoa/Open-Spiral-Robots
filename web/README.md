@@ -17,9 +17,17 @@ motion carries on, so the robot is never "regenerated" — it morphs.
 | **Speed** | *Strike*: tension a cable instantly from straight and measure the curl time t₉₀, the peak tip speed and the peak curl; the motion is shown as stroboscopic ghosts and a speed-coloured tip trail, and replays in slow motion (down to 1/100×). |
 | **Scale** | One log slider takes the same design from 8 mm to 2.5 m. Physics scale like the same material (stiffness ∝ L³, damping ∝ L⁴, tendon force ∝ L²), so a 10× smaller robot curls 10× faster while the peak tip speed stays the same — measured points land on the t ∝ L line of the scaling-law chart. A coin, a hand and a person give the sense of size. |
 
-The left panel holds the intuitive shape controls (length, cable count, unit
-angle, spiral turns, taper, centre line, gravity); the bottom timeline charts
-curl and tip speed and can be scrubbed to replay any moment.
+Everything you control sits in one bottom console: live metrics (always
+visible), the current mode's controls next to the shape controls (length,
+cable count, unit angle, spiral turns, taper, centre line, gravity), and a
+timeline that charts curl and tip speed and can be scrubbed to replay any
+moment. **Hide** (or the `H` key) folds the console to a single strip so the
+robot gets the whole screen; on phones it starts folded.
+
+The look ("Tide") follows where the spiral comes from — the nautilus shell and
+the octopus arm: the robot is a nacre body under water, over a sand bed with
+moving caustics (light theme: sunlit shallows; dark theme: open ocean). The
+mark is a nautilus drawn from the robot's own law r = a·e^(bθ).
 
 ### Engineering drawer
 
@@ -47,8 +55,22 @@ curl and tip speed and can be scrubbed to replay any moment.
   (length unit λ = L / 46.4 cm, mass λ³, time λ), where the scaled robot is
   numerically the reference robot and only gravity changes. Millimetre and metre
   robots are equally well conditioned; positions and times are converted back.
-* Link-to-link self collision is off (joint limits already bound the curl);
-  links still collide with the ground and the scene object.
+* **Contacts without clipping**: stiff contacts on a 1 ms step, link-to-link
+  collision, a small contact margin on the object and a touch of joint
+  armature keep links out of a grasped object — about 1 mm worst case during
+  a full-speed strike and 0 at rest (MuJoCo's defaults let the 46 cm robot sink
+  20–30 mm). Tendons reach full pull over 0.35 s like a real motor; the strike
+  is instantaneous. `tests/contact.test.ts` guards this.
+* **Rendering on demand**: the stage only draws when the robot or the camera
+  moves; line buffers are updated in place; the physics worker drops to a slow
+  idle loop once the robot is at rest.
+* **Quality tiers** (Auto / High / Medium / Low in the console): resolution,
+  shadows, nacre iridescence, caustics and marine snow. Auto starts from the
+  device (cores, memory, touch) and steps down when frames take longer than
+  ~26 ms for three seconds.
+* **Small first load**: the engineering tool (sketch, OpenCascade, PDF) is a
+  separate chunk loaded the first time the drawer opens; `npx openspirobs-web`
+  serves gzip.
 
 ### Debugging in the browser
 

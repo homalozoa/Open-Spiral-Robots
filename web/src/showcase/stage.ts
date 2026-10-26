@@ -1,6 +1,12 @@
-// Full-bleed three.js stage for the showcase: the live robot, tendons,
-// tip trail, stroboscopic ghosts, scene object, scale references and the
-// pointer interactions (grab the robot, drag the object).
+// Full-bleed three.js stage: the robot under water. A sand seabed with
+// moving caustics, depth fog sized to the robot, drifting marine snow, a
+// nacre (mother-of-pearl) robot, tendons, tip trail, stroboscopic ghosts,
+// the scene object and scale references, plus pointer picking.
+//
+// Performance: frames are rendered on demand (simulation frame, camera
+// motion, interaction) instead of continuously; line buffers are updated in
+// place; three quality tiers trade shadows, resolution and ambient effects
+// for speed, and "auto" steps down when the frame rate drops.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -12,16 +18,25 @@ import type { LinkMesh } from "../core/linkMesh";
 import type { ObjectKind } from "./physics";
 import type { Frame, WorkerMeta } from "./protocol";
 
-export const TENDON_HEX = [0xff5a4f, 0x3ea6ff, 0x3ccf6e, 0xffb020, 0xb06bff, 0x22d3c5, 0xff6fb5, 0x9aa3ad];
+/** Tendon colours: coral, sea glass, kelp, sun, anemone, lagoon, urchin, slate. */
+export const TENDON_HEX = [0xff6b4a, 0x5fd3c4, 0x9bc53d, 0xffc145, 0xc77dff, 0x3fa7d6, 0xf26ca7, 0x93a1a8];
 
-const BASE = new THREE.Color(0x8fc3ec);
-const WARM = new THREE.Color(0xff8a3d);
+const NACRE = new THREE.Color(0xf1e7d8);
+const CORAL = new THREE.Color(0xff6b4a);
 
-export interface StageTheme {
-  dark: boolean;
-}
-
+export type Quality = "high" | "medium" | "low";
 export type PickHit = { kind: "link"; index: number; point: THREE.Vector3 } | { kind: "object"; point: THREE.Vector3 };
+
+/** Water colours per theme: [fog / horizon, deep]. */
+const WATER = { dark: 0x0a3646, light: 0x9fd3d3 };
+
+export function initialQuality(): Quality {
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  if ((nav.deviceMemory ?? 8) <= 2 || (navigator.hardwareConcurrency ?? 8) <= 2) return "low";
+  if (coarse || (nav.deviceMemory ?? 8) <= 4 || (navigator.hardwareConcurrency ?? 8) <= 4) return "medium";
+  return "high";
+}
 
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
@@ -29,44 +44,64 @@ export class Stage {
   readonly camera = new THREE.PerspectiveCamera(32, 1, 0.001, 1000);
   readonly controls: OrbitControls;
   private robot = new THREE.Group();
-  private links: THREE.Mesh[] = [];
-  private linkMats: THREE.MeshPhysicalMaterial[] = [];
+  links: THREE.Mesh[] = [];
+  private linkMats: THREE.MeshStandardMaterial[] = [];
   private linkGeo: THREE.BufferGeometry | null = null;
   private edgeGeo: THREE.BufferGeometry | null = null;
   private tendons: Line2[] = [];
   private trail: Line2;
   private trailPts: number[] = [];
   private trailSpeed: number[] = [];
+  private trailBox: number[] = [];
   private ghosts = new THREE.Group();
   private refs = new THREE.Group();
+  private refsBox = new THREE.Box3();
   private object: THREE.Mesh | null = null;
   private objectKind: ObjectKind = "none";
   private mount = new THREE.Group();
-  private ground: THREE.Mesh;
-  private grid: THREE.Mesh | null = null;
+  private seabed: THREE.Mesh;
+  private seabedMat: THREE.MeshLambertMaterial;
+  private seabedUniforms = {
+    uTime: { value: 0 },
+    uScale: { value: 0.1 },
+    uGrid: { value: 0.01 },
+    uSand: { value: new THREE.Color(0xd8c7a4) },
+    uCaustic: { value: new THREE.Color(0xbff5ee) },
+    uCausticAmp: { value: 0.35 },
+    uGridAmp: { value: 0.18 },
+  };
+  private snow: THREE.Points | null = null;
+  private snowUniforms = { uTime: { value: 0 }, uSize: { value: 2 }, uBox: { value: new THREE.Vector3(1, 1, 1) }, uOrigin: { value: new THREE.Vector3() } };
   private grabLine: Line2;
   private sun: THREE.DirectionalLight;
   private meta: WorkerMeta | null = null;
   private autoFrame = true;
-  /** screen area (px) not covered by floating panels */
   private safe = { left: 0, top: 0, right: 0, bottom: 0 };
+  private viewBox: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
   private observer: ResizeObserver;
   readonly labels: HTMLElement;
   private labelItems: { el: HTMLElement; pos: THREE.Vector3 }[] = [];
+  private dirty = true;
+  private dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  private time = 0;
+  quality: Quality = initialQuality();
+  autoQuality = true;
+  private slowWindows = 0;
+  private frameStats = { slow: 0, fast: 0 };
   heat = true;
   showEdges = true;
   showTrail = true;
   showTendons = true;
+  /** rendered frames per second (0 when idle) */
   fps = 60;
-  onBeforeRender: ((dt: number) => void) | null = null;
+  renders = 0;
+  onQuality: ((q: Quality) => void) | null = null;
 
   constructor(readonly host: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x000000, 0);
     host.appendChild(this.renderer.domElement);
@@ -76,58 +111,143 @@ export class Stage {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.55;
+    pmrem.dispose();
+    this.scene.environmentIntensity = 0.5;
 
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(0.25, -1.3, 0.5);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.addEventListener("start", () => {
-      this.autoFrame = false;
-    });
+    this.controls.addEventListener("start", () => (this.autoFrame = false));
+    this.controls.addEventListener("change", () => this.invalidate());
 
-    this.scene.add(new THREE.HemisphereLight(0xdfe9ff, 0x2a2f38, 0.9));
-    this.sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    // light from the surface: a cool sky fill and a warm key sun
+    this.scene.add(new THREE.HemisphereLight(0xcdeff0, 0x3b2f22, 0.9));
+    this.sun = new THREE.DirectionalLight(0xfff3dd, 2.4);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target);
-    const rim = new THREE.DirectionalLight(0x9cc8ff, 0.9);
+    const rim = new THREE.DirectionalLight(0x7fd1c7, 0.8);
     rim.position.set(-1, 1.5, 0.6);
     this.scene.add(rim);
 
-    this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.22 }));
-    this.ground.receiveShadow = true;
-    this.scene.add(this.ground, this.robot, this.ghosts, this.refs, this.mount);
+    this.seabedMat = this.makeSeabedMaterial();
+    this.seabed = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.seabedMat);
+    this.seabed.receiveShadow = true;
+    this.scene.add(this.seabed, this.robot, this.ghosts, this.refs, this.mount);
 
     this.trail = new Line2(new LineGeometry(), new LineMaterial({ linewidth: 2.5, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false }));
     this.trail.frustumCulled = false;
+    this.trail.visible = false;
     this.scene.add(this.trail);
-    this.grabLine = new Line2(new LineGeometry(), new LineMaterial({ color: 0xffd23f, linewidth: 2, dashed: false, depthTest: false }));
+    this.grabLine = new Line2(new LineGeometry(), new LineMaterial({ color: 0xffc145, linewidth: 2, depthTest: false }));
     this.grabLine.renderOrder = 20;
     this.grabLine.visible = false;
     this.grabLine.frustumCulled = false;
+    this.grabLine.geometry.setPositions([0, 0, 0, 0, 0, 0]);
     this.scene.add(this.grabLine);
 
+    this.applyTheme();
+    this.applyQuality();
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
     this.resize();
+
     let last = performance.now();
+    let lastAmbient = 0;
+    let frames = 0;
+    let fpsT = last;
     const loop = () => {
       requestAnimationFrame(loop);
       const now = performance.now();
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      this.fps = this.fps * 0.92 + (dt > 0 ? 1 / dt : 60) * 0.08;
-      this.onBeforeRender?.(dt);
-      this.updateCamera(dt);
-      this.controls.update();
-      this.renderer.render(this.scene, this.camera);
-      this.placeLabels();
+      this.time += dt;
+      const cam = this.updateCamera(dt);
+      const damping = this.controls.update();
+      // ambient water motion at ≤30 fps, only on the high tier
+      let ambient = false;
+      if (this.quality === "high" && now - lastAmbient > 33) {
+        lastAmbient = now;
+        ambient = true;
+      }
+      if (this.dirty || cam || damping || ambient) {
+        // judge the device only on back-to-back frames: long gaps mean the
+        // tab was idle or throttled, not that the GPU is slow
+        const gap = dt * 1000;
+        if (gap < 250) {
+          if (gap > 26) this.frameStats.slow++;
+          else this.frameStats.fast++;
+        }
+        this.dirty = false;
+        this.updateFog();
+        this.seabedUniforms.uTime.value = this.time;
+        this.snowUniforms.uTime.value = this.time;
+        this.renderer.render(this.scene, this.camera);
+        this.placeLabels();
+        this.renders++;
+        frames++;
+      }
+      if (now - fpsT >= 1000) {
+        this.fps = (frames * 1000) / (now - fpsT);
+        frames = 0;
+        fpsT = now;
+        this.watchFps();
+      }
     };
     loop();
+  }
+
+  invalidate(): void {
+    this.dirty = true;
+  }
+
+  // ---------------------------------------------------------------- quality
+  setQuality(q: Quality, auto = false): void {
+    this.autoQuality = auto;
+    if (q === this.quality) return;
+    this.quality = q;
+    this.applyQuality();
+    this.onQuality?.(q);
+  }
+
+  private applyQuality(): void {
+    const q = this.quality;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, q === "high" ? 2 : q === "medium" ? 1.5 : 1));
+    this.renderer.shadowMap.enabled = q !== "low";
+    this.sun.castShadow = q !== "low";
+    const size = q === "high" ? 2048 : 1024;
+    if (this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.mapSize.set(size, size);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null as never;
+    }
+    this.renderer.shadowMap.type = q === "high" ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    if (this.snow) this.snow.visible = q === "high";
+    this.seabedUniforms.uCausticAmp.value = q === "low" ? 0 : this.dark ? 0.16 : 0.14;
+    // material swap: iridescent nacre only on the high tier
+    if (this.meta && this.linkGeo) this.rebuildLinkMaterials();
+    this.seabedMat.needsUpdate = true;
+    this.resize();
+  }
+
+  /**
+   * Step the quality down when most frames take longer than ~26 ms (under
+   * ~38 fps) for three seconds in a row while the scene is animating.
+   */
+  private watchFps(): void {
+    const { slow, fast } = this.frameStats;
+    this.frameStats = { slow: 0, fast: 0 };
+    if (!this.autoQuality || document.visibilityState !== "visible") return;
+    if (slow + fast < 20) return; // not animating enough to judge
+    this.slowWindows = slow > 0.6 * (slow + fast) ? this.slowWindows + 1 : 0;
+    if (this.slowWindows >= 3 && this.quality !== "low") {
+      this.slowWindows = 0;
+      this.quality = this.quality === "high" ? "medium" : "low";
+      this.applyQuality();
+      this.onQuality?.(this.quality);
+    }
   }
 
   resize(): void {
@@ -141,98 +261,233 @@ export class Stage {
     this.camera.updateProjectionMatrix();
     const res = new THREE.Vector2(w, h);
     for (const l of [...this.tendons, this.trail, this.grabLine]) (l.material as LineMaterial).resolution.copy(res);
+    this.snowUniforms.uSize.value = this.renderer.getPixelRatio() * 2.2;
+    this.invalidate();
+  }
+
+  // ---------------------------------------------------------------- theme
+  setTheme(dark: boolean): void {
+    this.dark = dark;
+    this.applyTheme();
+  }
+
+  private applyTheme(): void {
+    const water = new THREE.Color(this.dark ? WATER.dark : WATER.light);
+    // linear fog that follows the camera distance (see updateFog): the robot
+    // stays crisp, the far seabed melts into the water
+    this.scene.fog = new THREE.Fog(water, 1, 10);
+    this.updateFog();
+    // the sand stays a backdrop: dim in the deep, pale in the shallows
+    this.seabedUniforms.uSand.value.set(this.dark ? 0x3a3a30 : 0xd9cba9);
+    this.seabedUniforms.uCaustic.value.set(this.dark ? 0x6fd8c8 : 0xffffff);
+    this.seabedUniforms.uCausticAmp.value = this.quality === "low" ? 0 : this.dark ? 0.16 : 0.14;
+    this.seabedUniforms.uGridAmp.value = this.dark ? 0.16 : 0.12;
+    this.invalidate();
+  }
+
+  private updateFog(): void {
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (!fog) return;
+    const d = this.camera.position.distanceTo(this.controls.target) || 1;
+    fog.near = d * 1.15;
+    fog.far = d * (this.dark ? 3.2 : 4.2);
+  }
+
+  private makeSeabedMaterial(): THREE.MeshLambertMaterial {
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const u = this.seabedUniforms;
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, u);
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vSeaPos;")
+        .replace("#include <project_vertex>", "#include <project_vertex>\nvSeaPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+          varying vec3 vSeaPos;
+          uniform float uTime, uScale, uGrid, uCausticAmp, uGridAmp;
+          uniform vec3 uSand, uCaustic;
+          float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          // two drifting layers of distorted ridges: cheap caustics
+          float caustic(vec2 p, float t) {
+            vec2 q = p;
+            float c = 0.0;
+            for (int i = 0; i < 3; i++) {
+              q += vec2(sin(q.y * 1.7 + t * 0.6), cos(q.x * 1.3 - t * 0.5)) * 0.45;
+              c += abs(sin(q.x * 2.1) * sin(q.y * 2.3));
+            }
+            return pow(clamp(1.0 - c / 3.0, 0.0, 1.0), 6.0);
+          }
+          float gridLines(vec2 p, float s) {
+            vec2 g = abs(fract(p / s - 0.5) - 0.5) / fwidth(p / s);
+            return 1.0 - min(min(g.x, g.y), 1.0);
+          }`,
+        )
+        .replace(
+          "#include <color_fragment>",
+          `#include <color_fragment>
+          vec2 sp = vSeaPos.xy / uScale;
+          float grain = hash(floor(vSeaPos.xy / (uScale * 0.012))) * 0.06;
+          float ripple = 0.04 * sin(sp.x * 9.0 + sin(sp.y * 3.0) * 2.0);
+          diffuseColor.rgb = uSand * (0.94 + grain + ripple);`,
+        )
+        .replace(
+          "#include <opaque_fragment>",
+          `outgoingLight += uCaustic * caustic(sp * 1.6, uTime) * uCausticAmp;
+          float gl = max(gridLines(vSeaPos.xy, uGrid) * 0.35, gridLines(vSeaPos.xy, uGrid * 10.0));
+          outgoingLight = mix(outgoingLight, outgoingLight * 0.55, gl * uGridAmp * 2.0);
+          #include <opaque_fragment>`,
+        );
+    };
+    return mat;
+  }
+
+  private makeSnow(L: number): void {
+    if (this.snow) {
+      this.snow.geometry.dispose();
+      (this.snow.material as THREE.Material).dispose();
+      this.scene.remove(this.snow);
+    }
+    const n = 420;
+    const pos = new Float32Array(n * 3);
+    const seed = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      pos.set([Math.random(), Math.random(), Math.random()], i * 3);
+      seed[i] = Math.random();
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("seed", new THREE.BufferAttribute(seed, 1));
+    this.snowUniforms.uBox.value.set(L * 3, L * 2, L * 1.6);
+    this.snowUniforms.uOrigin.value.set(-L * 0.9, -L * 1.2, 0);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: this.snowUniforms,
+      vertexShader: `
+        uniform float uTime, uSize; uniform vec3 uBox, uOrigin;
+        attribute float seed;
+        varying float vA;
+        void main() {
+          vec3 p = position;
+          p.z = fract(p.z + uTime * (0.006 + seed * 0.01));
+          p.x = fract(p.x + sin(uTime * 0.2 + seed * 6.28) * 0.01);
+          vec4 mv = modelViewMatrix * vec4(uOrigin + p * uBox, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = uSize * (0.6 + seed);
+          vA = 0.25 + 0.35 * seed;
+        }`,
+      fragmentShader: `
+        varying float vA;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          gl_FragColor = vec4(0.85, 0.95, 0.95, vA * smoothstep(0.5, 0.0, d));
+        }`,
+    });
+    this.snow = new THREE.Points(g, mat);
+    this.snow.frustumCulled = false;
+    this.snow.visible = this.quality === "high";
+    this.scene.add(this.snow);
   }
 
   // ---------------------------------------------------------------- robot
   setRobot(meta: WorkerMeta, mesh: LinkMesh): void {
+    const lengthChanged = !this.meta || Math.abs(this.meta.lengthM - meta.lengthM) > 1e-9;
     this.meta = meta;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(mesh.vertices, 3));
     geo.setIndex(new THREE.BufferAttribute(mesh.triangles, 1));
     geo.computeVertexNormals();
-    const edges = new THREE.EdgesGeometry(geo, 28);
     this.linkGeo?.dispose();
     this.edgeGeo?.dispose();
     this.linkGeo = geo;
-    this.edgeGeo = edges;
-    for (const m of this.linkMats) m.dispose();
-    this.robot.clear();
-    this.links = [];
-    this.linkMats = [];
-    const edgeMat = new THREE.LineBasicMaterial({ color: 0x14324d, transparent: true, opacity: 0.35 });
-    meta.linkScale.forEach((s) => {
-      const mat = new THREE.MeshPhysicalMaterial({
-        color: BASE,
-        roughness: 0.42,
-        metalness: 0.0,
-        clearcoat: 0.6,
-        clearcoatRoughness: 0.35,
-        sheen: 0.4,
-        sheenColor: new THREE.Color(0xcfe8ff),
-        side: THREE.DoubleSide,
-        flatShading: true,
-      });
-      const link = new THREE.Mesh(geo, mat);
-      link.castShadow = true;
-      link.receiveShadow = true;
-      link.scale.setScalar(0.001 * s);
-      link.matrixAutoUpdate = true;
-      const e = new THREE.LineSegments(edges, edgeMat);
-      e.visible = this.showEdges;
-      link.add(e);
-      link.userData.index = this.links.length;
-      this.robot.add(link);
-      this.links.push(link);
-      this.linkMats.push(mat);
-    });
-    // tendons
+    this.edgeGeo = new THREE.EdgesGeometry(geo, 28);
+    this.rebuildLinkMaterials();
     for (const t of this.tendons) {
       t.geometry.dispose();
       (t.material as LineMaterial).dispose();
       this.scene.remove(t);
     }
     this.tendons = Array.from({ length: meta.nu }, (_, i) => {
-      const l = new Line2(new LineGeometry(), new LineMaterial({ color: TENDON_HEX[i % TENDON_HEX.length], linewidth: 2.2, transparent: true, opacity: 0.95, depthTest: true }));
+      const l = new Line2(new LineGeometry(), new LineMaterial({ color: TENDON_HEX[i % TENDON_HEX.length], linewidth: 2, transparent: true, opacity: 0.95 }));
       l.frustumCulled = false;
       (l.material as LineMaterial).resolution.set(this.host.clientWidth, this.host.clientHeight);
+      l.userData.n = 0;
       this.scene.add(l);
       return l;
     });
-    this.buildEnvironment(meta);
+    if (lengthChanged) this.buildEnvironment(meta);
     this.clearTrail();
+    this.invalidate();
+  }
+
+  private rebuildLinkMaterials(): void {
+    const meta = this.meta!;
+    const geo = this.linkGeo!;
+    for (const m of this.linkMats) m.dispose();
+    this.robot.clear();
+    this.links = [];
+    this.linkMats = [];
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x5b4a3a, transparent: true, opacity: 0.28 });
+    const high = this.quality === "high";
+    meta.linkScale.forEach((s) => {
+      const mat = high
+        ? new THREE.MeshPhysicalMaterial({
+            color: NACRE,
+            roughness: 0.32,
+            metalness: 0,
+            clearcoat: 0.7,
+            clearcoatRoughness: 0.25,
+            iridescence: 0.55,
+            iridescenceIOR: 1.6,
+            iridescenceThicknessRange: [180, 520],
+            side: THREE.DoubleSide,
+            flatShading: true,
+          })
+        : new THREE.MeshStandardMaterial({ color: NACRE, roughness: 0.4, metalness: 0, side: THREE.DoubleSide, flatShading: true });
+      const link = new THREE.Mesh(geo, mat);
+      link.castShadow = this.quality !== "low";
+      link.receiveShadow = this.quality !== "low";
+      link.scale.setScalar(0.001 * s);
+      const e = new THREE.LineSegments(this.edgeGeo!, edgeMat);
+      e.visible = this.showEdges && this.quality !== "low";
+      link.add(e);
+      link.userData.index = this.links.length;
+      this.robot.add(link);
+      this.links.push(link);
+      this.linkMats.push(mat);
+    });
   }
 
   private buildEnvironment(meta: WorkerMeta): void {
     const L = meta.lengthM;
-    // ground + adaptive grid
-    this.ground.scale.setScalar(L * 12);
-    this.ground.position.set(L * 0.5, 0, 0);
-    if (this.grid) {
-      this.grid.geometry.dispose();
-      (this.grid.material as THREE.Material).dispose();
-      this.scene.remove(this.grid);
-    }
-    this.grid = makeGrid(L, this.dark);
-    this.scene.add(this.grid);
+    this.seabed.scale.setScalar(L * 60);
+    this.seabed.position.set(L * 0.5, 0, 0);
+    this.seabedUniforms.uScale.value = L * 0.5;
+    this.seabedUniforms.uGrid.value = 10 ** Math.floor(Math.log10(L / 4));
+    this.makeSnow(L);
 
-    // wall mount at the base
+    // a weathered stone post holds the base
+    this.mount.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
     this.mount.clear();
-    const metal = new THREE.MeshStandardMaterial({ color: 0x3a4250, roughness: 0.35, metalness: 0.8 });
+    const stone = new THREE.MeshStandardMaterial({ color: 0x4a5452, roughness: 0.85, metalness: 0.05 });
     const bs = Math.max(L * 0.1, 0.004);
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(bs * 0.12, bs * 1.6, bs * 1.6), metal);
-    plate.position.set(meta.mount[0] - bs * 0.06, meta.mount[1], meta.mount[2]);
-    const post = new THREE.Mesh(new THREE.BoxGeometry(bs * 0.5, bs * 0.5, meta.mount[2]), metal);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(bs * 0.14, bs * 1.6, bs * 1.6), stone);
+    plate.position.set(meta.mount[0] - bs * 0.07, meta.mount[1], meta.mount[2]);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(bs * 0.28, bs * 0.38, meta.mount[2], 12), stone);
+    post.rotation.x = Math.PI / 2;
     post.position.set(meta.mount[0] - bs * 0.35, meta.mount[1], meta.mount[2] / 2);
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(bs * 1.4, bs * 1.4, bs * 0.12), metal);
-    foot.position.set(meta.mount[0] - bs * 0.35, meta.mount[1], bs * 0.06);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(bs * 0.8, bs * 0.95, bs * 0.18, 16), stone);
+    foot.rotation.x = Math.PI / 2;
+    foot.position.set(meta.mount[0] - bs * 0.35, meta.mount[1], bs * 0.09);
     for (const m of [plate, post, foot]) {
       m.castShadow = true;
       m.receiveShadow = true;
       this.mount.add(m);
     }
 
-    // light + shadow camera sized to the robot
-    this.sun.position.set(meta.mount[0] + L * 0.4, -L * 0.8, L * 2.2);
+    this.sun.position.set(meta.mount[0] + L * 0.4, -L * 0.8, L * 2.4);
     this.sun.target.position.set(L * 0.5, 0, 0);
     const sc = this.sun.shadow.camera;
     sc.left = -L * 1.6;
@@ -242,14 +497,8 @@ export class Stage {
     sc.near = L * 0.1;
     sc.far = L * 6;
     sc.updateProjectionMatrix();
-
+    this.applyTheme();
     this.viewBox = null;
-  }
-
-  private dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  setTheme(dark: boolean): void {
-    this.dark = dark;
-    if (this.meta) this.buildEnvironment(this.meta);
   }
 
   /** Apply a simulation frame (or a replayed pose). */
@@ -262,39 +511,53 @@ export class Stage {
       l.quaternion.set(poses[o + 4], poses[o + 5], poses[o + 6], poses[o + 3]);
     }
     this.colorize(bends);
+    this.invalidate();
   }
 
   private colorize(bends?: Float32Array): void {
     const lim = Math.max(1, this.meta?.jointLimitDeg ?? 30);
     this.linkMats.forEach((m, i) => {
       if (!this.heat || !bends) {
-        m.color.copy(BASE);
+        m.color.copy(NACRE);
         return;
       }
-      // a link is coloured by the bend of the joint at its base side
       const b = i === 0 ? 0 : Math.abs(bends[i - 1] ?? 0);
       const t = Math.min(1, b / lim);
-      m.color.copy(BASE).lerp(WARM, t * t * (3 - 2 * t));
+      m.color.copy(NACRE).lerp(CORAL, t * t * (3 - 2 * t) * 0.85);
     });
   }
 
+  private lastPoses: Float32Array | null = null;
   applyFrame(f: Frame): void {
-    this.applyPoses(f.poses, f.bends);
-    f.tendons.forEach((pts, i) => {
-      const line = this.tendons[i];
-      if (!line) return;
-      line.visible = this.showTendons && pts.length >= 6;
-      if (line.visible) {
-        line.geometry.dispose();
-        line.geometry = new LineGeometry();
-        line.geometry.setPositions(Array.from(pts));
+    if (f.poses.length) {
+      // skip the redraw when nothing moved (robot at rest)
+      const lp = this.lastPoses;
+      let moved = !lp || lp.length !== f.poses.length;
+      if (!moved && lp) {
+        for (let i = 0; i < lp.length; i++) {
+          if (Math.abs(lp[i] - f.poses[i]) > 1e-6) {
+            moved = true;
+            break;
+          }
+        }
       }
-    });
-    if (f.grab) {
+      this.lastPoses = f.poses;
+      if (moved) this.applyPoses(f.poses, f.bends);
+      f.tendons.forEach((pts, i) => {
+        const line = this.tendons[i];
+        if (!line) return;
+        line.visible = this.showTendons && pts.length >= 6;
+        if (line.visible && moved) setLinePoints(line, pts);
+      });
+    }
+    const g = f.grab;
+    if (g) {
       this.grabLine.visible = true;
-      this.grabLine.geometry.setPositions([...f.grab.from, ...f.grab.to]);
-    } else {
+      setLinePoints(this.grabLine, [...g.from, ...g.to]);
+      this.invalidate();
+    } else if (this.grabLine.visible) {
       this.grabLine.visible = false;
+      this.invalidate();
     }
   }
 
@@ -304,21 +567,22 @@ export class Stage {
     this.trailPts = [];
     this.trailSpeed = [];
     this.trail.visible = false;
+    this.invalidate();
   }
 
   pushTrail(tip: [number, number, number], speed: number, vmax: number): void {
     if (!this.showTrail) {
-      this.trail.visible = false;
+      if (this.trail.visible) this.clearTrail();
       return;
     }
     const n = this.trailPts.length;
     if (n >= 3) {
       const d = Math.hypot(tip[0] - this.trailPts[n - 3], tip[1] - this.trailPts[n - 2], tip[2] - this.trailPts[n - 1]);
-      if (d < (this.meta?.lengthM ?? 0.4) * 0.002) return;
+      if (d < (this.meta?.lengthM ?? 0.4) * 0.004) return;
     }
     this.trailPts.push(...tip);
     this.trailSpeed.push(speed);
-    if (this.trailPts.length > 3 * 600) {
+    if (this.trailPts.length > 3 * 400) {
       this.trailPts.splice(0, 3);
       this.trailSpeed.shift();
     }
@@ -331,36 +595,31 @@ export class Stage {
       return;
     }
     const colors: number[] = [];
-    const slow = new THREE.Color(0x3ea6ff);
-    const fast = new THREE.Color(0xffd23f);
+    const slow = new THREE.Color(0x5fd3c4);
+    const fast = new THREE.Color(0xffc145);
     const c = new THREE.Color();
     for (let i = 0; i < speed.length; i++) {
       c.copy(slow).lerp(fast, Math.min(1, speed[i] / Math.max(1e-6, vmax)));
       colors.push(c.r, c.g, c.b);
     }
     this.trailBox = Array.from(pts);
-    this.trail.geometry.dispose();
-    const g = new LineGeometry();
-    g.setPositions(this.trailBox);
-    g.setColors(colors);
-    this.trail.geometry = g;
+    setLinePoints(this.trail, this.trailBox, colors);
     this.trail.visible = true;
+    this.invalidate();
   }
 
   // ---------------------------------------------------------------- ghosts
   setGhosts(list: Float32Array[]): void {
-    this.ghosts.traverse((o) => {
-      const m = (o as THREE.Mesh).material as THREE.Material | undefined;
-      m?.dispose();
-    });
+    this.ghosts.traverse((o) => ((o as THREE.Mesh).material as THREE.Material | undefined)?.dispose());
     this.ghosts.clear();
+    this.invalidate();
     if (!this.linkGeo || !this.meta) return;
     list.forEach((poses, k) => {
       const t = list.length > 1 ? k / (list.length - 1) : 1;
       const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(0x3ea6ff).lerp(new THREE.Color(0xffd23f), t),
+        color: new THREE.Color(0x5fd3c4).lerp(new THREE.Color(0xff6b4a), t),
         transparent: true,
-        opacity: 0.12 + 0.28 * t,
+        opacity: 0.1 + 0.3 * t,
         depthWrite: false,
         roughness: 0.6,
         flatShading: true,
@@ -385,8 +644,10 @@ export class Stage {
       this.object = null;
     }
     this.objectKind = kind;
+    this.invalidate();
     if (kind === "none") return;
-    const mat = new THREE.MeshPhysicalMaterial({ color: 0xf2c14e, roughness: 0.3, metalness: 0.1, clearcoat: 0.8 });
+    // a polished pebble / sea-glass look
+    const mat = new THREE.MeshPhysicalMaterial({ color: 0x3fa7d6, roughness: 0.15, transmission: 0, clearcoat: 1, metalness: 0, sheen: 0.3 });
     const geo =
       kind === "cylinder"
         ? new THREE.CylinderGeometry(sizeM / 2, sizeM / 2, 0.6 * lengthM, 48)
@@ -394,7 +655,7 @@ export class Stage {
           ? new THREE.SphereGeometry(sizeM / 2, 48, 32)
           : new THREE.BoxGeometry(sizeM, sizeM, sizeM);
     this.object = new THREE.Mesh(geo, mat);
-    this.object.castShadow = true;
+    this.object.castShadow = this.quality !== "low";
     this.object.receiveShadow = true;
     this.object.position.set(...pos);
     this.scene.add(this.object);
@@ -402,6 +663,7 @@ export class Stage {
 
   moveObject(pos: [number, number, number]): void {
     this.object?.position.set(...pos);
+    this.invalidate();
   }
 
   // ---------------------------------------------------------------- scale references
@@ -413,7 +675,6 @@ export class Stage {
     this.refs.clear();
     this.labelItems.forEach((l) => l.el.remove());
     this.labelItems = [];
-    // in the robot's plane, standing on the ground to the right of its reach
     const y = 0;
     let x = lengthM * 1.2;
     const add = (obj: THREE.Object3D, width: number, height: number, label: string) => {
@@ -429,11 +690,10 @@ export class Stage {
       this.label(label, new THREE.Vector3(x + width / 2, y, height * 1.08 + lengthM * 0.02));
       x += width + Math.max(0.01, lengthM * 0.15);
     };
-    const skin = new THREE.MeshStandardMaterial({ color: 0xe0b393, roughness: 0.7 });
-    const cloth = new THREE.MeshStandardMaterial({ color: 0x55657a, roughness: 0.8 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xd9a98a, roughness: 0.7 });
+    const slate = new THREE.MeshStandardMaterial({ color: 0x2f4f5a, roughness: 0.8 });
     if (kinds.has("coin")) {
-      // standing on its edge, face toward the camera
-      const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.0121, 0.0121, 0.0019, 64), new THREE.MeshStandardMaterial({ color: 0xd9b45a, metalness: 0.9, roughness: 0.25 }));
+      const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.0121, 0.0121, 0.0019, 64), new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.9, roughness: 0.3 }));
       coin.position.z = 0.0121;
       const g = new THREE.Group();
       g.add(coin);
@@ -444,8 +704,7 @@ export class Stage {
       const palm = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.022, 0.1), skin);
       palm.position.z = 0.05;
       g.add(palm);
-      const fingers = [[-0.03, 0.075], [-0.01, 0.085], [0.01, 0.08], [0.03, 0.065]];
-      for (const [fx, fl] of fingers) {
+      for (const [fx, fl] of [[-0.03, 0.075], [-0.01, 0.085], [0.01, 0.08], [0.03, 0.065]]) {
         const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.009, fl - 0.018, 6, 12), skin);
         f.position.set(fx, 0, 0.1 + fl / 2);
         g.add(f);
@@ -457,15 +716,15 @@ export class Stage {
       add(g, 0.1, 0.19, "Hand · 19 cm");
     }
     if (kinds.has("human")) {
-      // a flat stand-up silhouette reads better than a stack of capsules
       const g = new THREE.Group();
-      const sil = new THREE.Mesh(humanSilhouette(), cloth);
+      const sil = new THREE.Mesh(humanSilhouette(), slate);
       sil.rotation.x = Math.PI / 2;
       sil.position.y = 0.01;
       g.add(sil);
-      add(g, 0.54, 1.75, "Person · 1.75 m");
+      add(g, 0.54, 1.75, "Diver · 1.75 m");
     }
     this.refsBox = this.refs.children.length ? new THREE.Box3().setFromObject(this.refs) : new THREE.Box3();
+    this.invalidate();
   }
 
   label(text: string, pos: THREE.Vector3): HTMLElement {
@@ -490,16 +749,11 @@ export class Stage {
   }
 
   // ---------------------------------------------------------------- camera
-  /** Resume automatic framing (after the user orbited the camera). */
   frame(_extra = 0, force = false): void {
     if (force) this.autoFrame = true;
+    this.invalidate();
   }
 
-  /**
-   * What the camera should keep in view: mount, live links, ghosts, trail and
-   * scale references. Grows immediately, shrinks slowly, so the view follows
-   * fast motion without pumping.
-   */
   private targetBox(): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
     if (!this.meta) return null;
     const L = this.meta.lengthM;
@@ -522,16 +776,12 @@ export class Stage {
     return box;
   }
 
-  private viewBox: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
-  private trailBox: number[] = [];
-  private refsBox = new THREE.Box3();
-
   setSafeArea(a: { left: number; top: number; right: number; bottom: number }): void {
     this.safe = a;
     this.applyViewOffset();
+    this.invalidate();
   }
 
-  /** Shift the principal point to the centre of the safe area. */
   private applyViewOffset(): void {
     const W = Math.max(1, this.host.clientWidth);
     const H = Math.max(1, this.host.clientHeight);
@@ -541,10 +791,11 @@ export class Stage {
     this.camera.setViewOffset(W, H, W / 2 - cx, H / 2 - cy, W, H);
   }
 
-  private updateCamera(dt: number): void {
-    if (!this.autoFrame) return;
+  /** Returns true while the camera is still moving towards its target. */
+  private updateCamera(dt: number): boolean {
+    if (!this.autoFrame) return false;
     const target = this.targetBox();
-    if (!target) return;
+    if (!target) return false;
     if (!this.viewBox) this.viewBox = { ...target };
     const vb = this.viewBox;
     const grow = 1 - Math.exp(-dt * 8);
@@ -564,19 +815,22 @@ export class Stage {
     const tv = Math.tan(vfov / 2) * sh;
     const th = Math.tan(vfov / 2) * this.camera.aspect * sw;
     const dir = new THREE.Vector3(0.16, -1, 0.26).normalize();
-    // the view is tilted, so the vertical extent needs a little extra room
     const dist = Math.max(hw / th, (hh * 1.08) / tv) + Math.abs(hw * dir.x);
     const want = center.clone().addScaledVector(dir, dist);
     const k = 1 - Math.exp(-dt * 5);
+    const moving = this.camera.position.distanceTo(want) > dist * 1e-3 || this.controls.target.distanceTo(center) > dist * 1e-3;
+    if (!moving) return false;
     this.controls.target.lerp(center, k);
     this.camera.position.lerp(want, k);
     this.camera.near = dist / 200;
     this.camera.far = dist * 50;
     this.camera.updateProjectionMatrix();
+    return true;
   }
 
   recenter(): void {
     this.autoFrame = true;
+    this.invalidate();
   }
 
   // ---------------------------------------------------------------- picking
@@ -593,7 +847,6 @@ export class Stage {
     return { kind: "link", index: hit.object.userData.index as number, point: hit.point.clone() };
   }
 
-  /** Point on the plane through `anchor` facing the camera, under the pointer. */
   dragPoint(clientX: number, clientY: number, anchor: THREE.Vector3, normal?: THREE.Vector3): THREE.Vector3 | null {
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
@@ -605,9 +858,11 @@ export class Stage {
 
   setEdges(on: boolean): void {
     this.showEdges = on;
-    for (const l of this.links) l.children.forEach((c) => (c.visible = on));
+    for (const l of this.links) l.children.forEach((c) => (c.visible = on && this.quality !== "low"));
+    this.invalidate();
   }
 
+  /** PNG of the current view (rendered now, read before the buffer is presented). */
   screenshot(): Promise<Blob> {
     this.renderer.render(this.scene, this.camera);
     return new Promise((res, rej) => this.renderer.domElement.toBlob((b) => (b ? res(b) : rej(new Error("toBlob"))), "image/png"));
@@ -618,52 +873,33 @@ export class Stage {
   }
 }
 
-/** Infinite-looking ground grid: minor/major lines that fade with distance. */
-function makeGrid(L: number, dark: boolean): THREE.Mesh {
-  const step = 10 ** Math.floor(Math.log10(L / 4));
-  const size = L * 40;
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    extensions: { derivatives: true } as never,
-    uniforms: {
-      uStep: { value: step },
-      uCenter: { value: new THREE.Vector2(L * 0.5, 0) },
-      uFade: { value: L * 2.6 },
-      uColor: { value: new THREE.Color(dark ? 0x9fb3cc : 0x5d7088) },
-      uAlpha: { value: dark ? 0.55 : 0.45 },
-    },
-    vertexShader: `
-      varying vec2 vW;
-      void main() {
-        vec4 w = modelMatrix * vec4(position, 1.0);
-        vW = w.xy;
-        gl_Position = projectionMatrix * viewMatrix * w;
-      }`,
-    fragmentShader: `
-      uniform float uStep; uniform vec2 uCenter; uniform float uFade; uniform vec3 uColor; uniform float uAlpha;
-      varying vec2 vW;
-      float lines(vec2 p, float s) {
-        vec2 g = abs(fract(p / s - 0.5) - 0.5) / fwidth(p / s);
-        return 1.0 - min(min(g.x, g.y), 1.0);
-      }
-      void main() {
-        float minor = lines(vW, uStep) * 0.35;
-        float major = lines(vW, uStep * 10.0);
-        float d = length(vW - uCenter);
-        float fade = 1.0 - smoothstep(uFade * 0.35, uFade, d);
-        float a = max(minor, major) * fade * uAlpha;
-        if (a < 0.003) discard;
-        gl_FragColor = vec4(uColor, a);
-      }`,
-  });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
-  mesh.position.set(L * 0.5, 0, L * 1e-4);
-  mesh.renderOrder = -1;
-  return mesh;
+/** Update a fat line in place when the point count is unchanged. */
+function setLinePoints(line: Line2, pts: ArrayLike<number>, colors?: number[]): void {
+  const n = Math.floor(pts.length / 3);
+  const geo = line.geometry as LineGeometry;
+  const start = geo.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute | undefined;
+  if (start && line.userData.n === n && !colors) {
+    const arr = start.data.array as Float32Array;
+    for (let i = 0; i < n - 1; i++) {
+      arr[i * 6] = pts[i * 3];
+      arr[i * 6 + 1] = pts[i * 3 + 1];
+      arr[i * 6 + 2] = pts[i * 3 + 2];
+      arr[i * 6 + 3] = pts[i * 3 + 3];
+      arr[i * 6 + 4] = pts[i * 3 + 4];
+      arr[i * 6 + 5] = pts[i * 3 + 5];
+    }
+    start.data.needsUpdate = true;
+    return;
+  }
+  geo.dispose();
+  const g = new LineGeometry();
+  g.setPositions(Array.from(pts));
+  if (colors) g.setColors(colors);
+  line.geometry = g;
+  line.userData.n = n;
 }
 
-/** 1.75 m human outline (metres, x across, y up), extruded 1.5 cm. */
+/** 1.75 m human (diver) outline, metres, extruded 1.5 cm. */
 function humanSilhouette(): THREE.ExtrudeGeometry {
   const right: [number, number][] = [
     [0.055, 1.52], [0.2, 1.46], [0.245, 1.38], [0.27, 0.86], [0.235, 0.83], [0.205, 1.25],

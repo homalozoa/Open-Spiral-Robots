@@ -58,7 +58,7 @@ export class Viewport {
   }
 
   setTheme(dark: boolean): void {
-    this.scene.background = new THREE.Color(dark ? 0x1f2227 : 0xf5f6f8);
+    this.scene.background = new THREE.Color(dark ? 0x061a22 : 0xf3eee2);
     this.invalidate();
   }
 
@@ -101,7 +101,7 @@ export class Viewport {
   /** PNG of the view; `light` forces the light background (for reports). */
   screenshot(light = false): Promise<Blob> {
     const bg = this.scene.background;
-    if (light) this.scene.background = new THREE.Color(0xf5f6f8);
+    if (light) this.scene.background = new THREE.Color(0xf3eee2);
     this.renderer.render(this.scene, this.camera);
     this.scene.background = bg;
     // toBlob snapshots the canvas now, so the normal background can come back

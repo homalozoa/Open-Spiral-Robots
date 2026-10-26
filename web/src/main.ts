@@ -2,19 +2,18 @@ import "./ui/style.css";
 import "./showcase/showcase.css";
 import { Vector3 } from "three";
 import { Store, shareLink } from "./app/store";
-import { cableCount } from "./core/design";
+import { cableCount, checkDesign } from "./core/design";
 import { baseLinkMesh } from "./core/linkMesh";
-import { RANGES, type Params } from "./core/params";
+import { defaultParams, parseParams, RANGES, type Params } from "./core/params";
 import { formatLength, formatMass, formatTime, scaleParams } from "./core/scaling";
 import { resolve } from "./core/state";
-import { logger } from "./debug/log";
-import { mountEngineering } from "./engineering/engineering";
+import { getLog, logger } from "./debug/log";
 import { button, el, numberControl, type NumberControl } from "./ui/controls";
 import { PhysicsClient } from "./showcase/client";
 import { getLang, setLang, t, type Key } from "./showcase/i18n";
-import type { ObjectKind, SceneObject } from "./showcase/physics";
+import { DEFAULT_TUNING, type ObjectKind, type SceneObject } from "./showcase/physics";
 import type { Frame, WorkerMeta } from "./showcase/protocol";
-import { Stage } from "./showcase/stage";
+import { initialQuality, Stage, type Quality } from "./showcase/stage";
 import { joystick, logSlider, timeline } from "./showcase/widgets";
 
 const log = logger("show");
@@ -39,7 +38,7 @@ app.className = "show";
 const stageHost = el("div", { class: "stage" });
 const stage = new Stage(stageHost);
 const phys = new PhysicsClient();
-const loading = el("div", { class: "stage-loading" }, el("span", { class: "spinner" }), el("span", {}, t("loading")));
+const loading = el("div", { class: "stage-loading" }, nautilus("loader"), el("span", {}, t("loading")));
 
 // ---------------------------------------------------------------- top bar
 const tabs = el("div", { class: "modes", role: "tablist" });
@@ -60,8 +59,8 @@ function say(msg: string) {
 }
 const topbar = el(
   "header",
-  { class: "glass topbar-show" },
-  el("div", { class: "brand-show" }, el("span", { class: "logo", "aria-hidden": "true" }), el("div", {}, el("strong", {}, "OpenSpiRobs"), el("small", {}, t("tagline")))),
+  { class: "topbar-show" },
+  el("div", { class: "brand-show" }, nautilus("logo"), el("div", {}, el("strong", {}, "OpenSpiRobs"), el("small", {}, t("tagline")))),
   tabs,
   el(
     "div",
@@ -70,7 +69,6 @@ const topbar = el(
       setLang(getLang() === "zh" ? "en" : "zh");
       location.reload();
     }, "chip", "Language"),
-    button(t("shape"), () => app.classList.toggle("panel-open"), "chip mobile-only"),
     button(t("share"), () => void share(), "chip desktop-only"),
     labelled(button("⚙", () => openEngineering(true), "chip accent", t("engineering")), t("engineering")),
   ),
@@ -96,17 +94,20 @@ gravity.addEventListener("change", () => store.set({ sim_gravity: gravity.checke
 const unitsInfo = el("span", { class: "muted mono" });
 const shapePanel = el(
   "section",
-  { class: "glass panel-left", "aria-label": t("shape") },
+  { class: "cpanel shape-col", "aria-label": t("shape") },
   el("h3", {}, t("shape")),
   el("div", { class: "len-row" }, el("span", { class: "muted" }, t("length")), lengthReadout),
   lengthSlider.root,
-  el("div", { class: "row-split" }, el("span", { class: "muted" }, t("cables")), cablesSeg),
-  cDtheta.row,
-  cTurns.row,
-  cB.row,
-  cP.row,
-  el("div", { class: "row-split" }, el("label", { class: "toggle-row" }, gravity, el("span", { class: "switch" }), el("span", {}, t("gravity"))), unitsInfo),
-  button(t("more"), () => openEngineering(true), "link-btn"),
+  el("div", { class: "shape-grid" }, cDtheta.row, cTurns.row, cB.row, cP.row),
+  el(
+    "div",
+    { class: "row-split" },
+    el("span", { class: "muted" }, t("cables")),
+    cablesSeg,
+    el("label", { class: "toggle-row" }, gravity, el("span", { class: "switch" }), el("span", {}, t("gravity"))),
+  ),
+  el("div", { class: "row-split" }, unitsInfo,
+  button(t("more"), () => openEngineering(true), "link-btn")),
 );
 
 function setLength(mm: number) {
@@ -118,7 +119,7 @@ function setLength(mm: number) {
 }
 
 // ---------------------------------------------------------------- HUD
-const hud = el("section", { class: "glass hud", "aria-label": "Metrics" });
+const hud = el("div", { class: "metrics-strip", "aria-label": "Metrics" });
 const hudItems = new Map<string, HTMLElement>();
 for (const [k, label] of [
   ["curl", t("curl")],
@@ -199,7 +200,7 @@ function toggleGrasp() {
 const heatChk = checkbox(t("heat"), true, (v) => (stage.heat = v));
 const flexDock = el(
   "section",
-  { class: "glass dock", "data-mode": "flex" },
+  { class: "cpanel mode-col", "data-mode": "flex" },
   el("div", { class: "dock-col" }, el("h3", {}, t("steer")), joy.root, el("p", { class: "hint" }, t("steerHint"))),
   el(
     "div",
@@ -245,7 +246,7 @@ for (const f of [1, 4, 10, 30, 100]) slowSel.append(el("option", { value: f, sel
 const strikeBtn = button(`▶ ${t("strike")}`, () => void strike(), "btn-show strike");
 const speedDock = el(
   "section",
-  { class: "glass dock", "data-mode": "speed" },
+  { class: "cpanel mode-col", "data-mode": "speed" },
   el("div", { class: "dock-col" }, strikeBtn, el("div", { class: "row-split" }, el("span", { class: "muted" }, t("force")), force), el("p", { class: "hint" }, t("strikeHint"))),
   el("div", { class: "dock-col grow" }, results, el("div", { class: "row-split" }, ghostChk, trailChk), el("div", { class: "row-split" }, button(t("slowmo"), () => void replayStrike(), "btn-show"), slowSel)),
 );
@@ -374,7 +375,7 @@ const scaleStats = el("div", { class: "results" });
 const lawCanvas = el("canvas", { class: "law", "aria-label": t("law") });
 const scaleDock = el(
   "section",
-  { class: "glass dock", "data-mode": "scale" },
+  { class: "cpanel mode-col", "data-mode": "scale" },
   el("div", { class: "dock-col grow" }, el("h3", {}, t("scaleTitle")), bigLen, scaleSlider.root, el("p", { class: "hint" }, t("scaleHint")), el("div", { class: "row-split" }, el("span", { class: "muted" }, t("refs")), refChips)),
   el("div", { class: "dock-col" }, scaleStats, el("h3", {}, `${t("law")} · ${t("lawText")}`), lawCanvas, button(t("measureHere"), () => void strike(), "btn-show")),
 );
@@ -448,7 +449,7 @@ speedSel.addEventListener("change", () => setRun(ui.running, Number(speedSel.val
 const timeLabel = el("span", { class: "mono muted tl-time" });
 const timelineBar = el(
   "footer",
-  { class: "glass timeline" },
+  { class: "timeline-row" },
   playBtn,
   button("↺", () => {
     phys.send({ type: "reset" });
@@ -488,15 +489,25 @@ function goLive() {
 
 // ---------------------------------------------------------------- engineering sheet
 const engHost = el("div", { class: "eng-sheet", hidden: true, role: "dialog", "aria-label": t("engineering") });
-const eng = mountEngineering(engHost, store, {
-  onSimulate: () => openEngineering(false),
-  onClose: () => openEngineering(false),
-  perf: () => ({ fps: stage.fps, stepUs: phys.frame?.stepUs ?? 0 }),
-});
-function openEngineering(open: boolean) {
+type Eng = ReturnType<typeof import("./engineering/engineering").mountEngineering>;
+let engPromise: Promise<Eng> | null = null;
+/** The engineering tool (sketch, OpenCascade CAD, PDF, ...) loads on first use. */
+function ensureEngineering(): Promise<Eng> {
+  engPromise ??= import("./engineering/engineering").then(({ mountEngineering }) =>
+    mountEngineering(engHost, store, {
+      onSimulate: () => openEngineering(false),
+      onClose: () => openEngineering(false),
+      perf: () => ({ fps: stage.fps, stepUs: phys.frame?.stepUs ?? 0 }),
+    }),
+  );
+  return engPromise;
+}
+async function openEngineering(open: boolean) {
+  if (open && !engPromise) say(t("loading"));
+  const eng = open || engPromise ? await ensureEngineering() : null;
   engHost.hidden = !open;
   document.body.classList.toggle("eng-open", open);
-  eng.setVisible(open);
+  eng?.setVisible(open);
   if (!open) stage.resize();
 }
 addEventListener("keydown", (e: KeyboardEvent) => {
@@ -504,7 +515,62 @@ addEventListener("keydown", (e: KeyboardEvent) => {
 });
 
 // ---------------------------------------------------------------- layout
-app.append(stageHost, loading, topbar, shapePanel, hud, flexDock, speedDock, scaleDock, timelineBar, toast, engHost);
+// ---------------------------------------------------------------- console
+// one bottom console: metrics (always visible), the mode and shape controls
+// (collapsible) and the timeline
+const qualitySel = el("select", { "aria-label": t("quality"), title: t("quality") });
+for (const [v, k] of [["auto", "auto"], ["high", "high"], ["medium", "medium"], ["low", "low"]] as const) qualitySel.append(el("option", { value: v }, t(k)));
+qualitySel.value = "auto";
+qualitySel.addEventListener("change", () => {
+  const v = qualitySel.value;
+  if (v === "auto") stage.setQuality(initialQuality(), true);
+  else stage.setQuality(v as Quality, false);
+  syncQuality();
+});
+function syncQuality() {
+  app.classList.toggle("q-low", stage.quality === "low");
+  const auto = qualitySel.options[0];
+  auto.textContent = stage.autoQuality ? `${t("auto")} · ${t(stage.quality)}` : t("auto");
+}
+stage.onQuality = () => syncQuality();
+syncQuality();
+let collapsed = (() => {
+  try {
+    const v = localStorage.getItem("openspirobs.collapsed");
+    if (v !== null) return v === "1";
+  } catch {
+    /* default below */
+  }
+  return matchMedia("(max-width: 700px)").matches;
+})();
+const collapseBtn = button("", () => setCollapsed(!collapsed), "collapse-btn");
+const consoleEl = el(
+  "section",
+  { class: "console", "aria-label": "Controls" },
+  el("div", { class: "console-head" }, hud, el("span", { class: "spacer" }), qualitySel, collapseBtn),
+  el("div", { class: "console-body", id: "console-body" }, flexDock, speedDock, scaleDock, shapePanel),
+  timelineBar,
+);
+collapseBtn.setAttribute("aria-controls", "console-body");
+function setCollapsed(c: boolean) {
+  collapsed = c;
+  consoleEl.classList.toggle("collapsed", c);
+  collapseBtn.textContent = c ? `▴ ${t("expand")}` : `▾ ${t("collapse")}`;
+  collapseBtn.setAttribute("aria-expanded", String(!c));
+  try {
+    localStorage.setItem("openspirobs.collapsed", c ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  requestAnimationFrame(updateSafeArea);
+}
+addEventListener("keydown", (e: KeyboardEvent) => {
+  const tag = (e.target as HTMLElement).tagName;
+  if (e.key.toLowerCase() === "h" && !e.metaKey && !e.ctrlKey && tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") setCollapsed(!collapsed);
+});
+
+app.append(stageHost, loading, topbar, consoleEl, toast, engHost);
+setCollapsed(collapsed);
 
 function setMode(m: Mode) {
   ui.mode = m;
@@ -529,21 +595,16 @@ function setMode(m: Mode) {
 
 /** Keep the robot framed in the part of the screen the panels leave free. */
 function updateSafeArea() {
-  const W = app.clientWidth;
   const H = app.clientHeight;
-  const vis = (e: HTMLElement) => e.offsetParent !== null && getComputedStyle(e).display !== "none";
-  const r = (e: HTMLElement) => e.getBoundingClientRect();
-  const wide = W > 700;
-  const dock = [flexDock, speedDock, scaleDock].find((d) => vis(d));
-  const bottomEdge = dock ? r(dock).top : r(timelineBar).top;
   stage.setSafeArea({
-    left: wide && vis(shapePanel) ? r(shapePanel).right + 8 : 0,
-    right: wide && vis(hud) ? W - r(hud).left + 8 : 0,
-    top: (wide || !vis(hud) ? r(topbar).bottom : Math.max(r(topbar).bottom, r(hud).bottom)) + 8,
-    bottom: Math.max(0, H - bottomEdge + 8),
+    left: 0,
+    right: 0,
+    top: topbar.getBoundingClientRect().bottom + 8,
+    bottom: Math.max(0, H - consoleEl.getBoundingClientRect().top + 8),
   });
 }
 new ResizeObserver(updateSafeArea).observe(app);
+new ResizeObserver(updateSafeArea).observe(consoleEl);
 
 function syncChips() {
   const p = store.params;
@@ -580,7 +641,8 @@ function rebuild(resetPose = false) {
     const r = store.resolved;
     if (!r.design) return;
     const seq = phys.build(r.params, ui.object, resetPose);
-    pendingMesh.set(seq, baseLinkMesh(r.design, r.params, 48));
+    // same tessellation as the collision mesh, so what you see is what touches
+    pendingMesh.set(seq, baseLinkMesh(r.design, r.params, DEFAULT_TUNING.segments));
   }, 16);
 }
 
@@ -710,8 +772,27 @@ function checkbox(label: string, value: boolean, onChange: (v: boolean) => void)
 }
 
 // ---------------------------------------------------------------- console API
+const lazy =
+  <K extends keyof Eng>(k: K) =>
+  async (...args: unknown[]) => {
+    const e = await ensureEngineering();
+    return (e[k] as (...a: unknown[]) => unknown)(...args);
+  };
 const api = {
-  ...eng,
+  engineering: () => ensureEngineering(),
+  exportXml: lazy("exportXml"),
+  exportStep: lazy("exportStep"),
+  exportStl: lazy("exportStl"),
+  sketchZip: lazy("sketchZip"),
+  reportPdf: lazy("reportPdf"),
+  build: lazy("build"),
+  params: () => structuredClone(store.params),
+  set: (p: Record<string, unknown>) => store.set(parseParams(p, store.params)),
+  design: () => store.resolved.design,
+  checks: () => checkDesign(store.params, store.resolved.design),
+  log: () => getLog(),
+  reset: () => store.replace(defaultParams()),
+  store,
   stage,
   physics: phys,
   mode: (m?: Mode) => (m ? setMode(m) : ui.mode),
@@ -727,3 +808,43 @@ const api = {
 syncShape();
 setMode(ui.mode);
 renderResults();
+
+/**
+ * The mark: a nautilus drawn from the robot's own law r = a·e^(bθ), with the
+ * chamber walls (septa) every 30° — the same spiral the robot is cut from.
+ */
+function nautilus(cls: string): SVGSVGElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "-50 -50 100 100");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("aria-hidden", "true");
+  const b = 0.1764;
+  const tMax = 3.2 * Math.PI;
+  const a = 46 / Math.exp(b * tMax);
+  const pt = (th: number, k = 1): [number, number] => {
+    const r = a * Math.exp(b * th) * k;
+    return [r * Math.cos(th + 0.6), -r * Math.sin(th + 0.6)];
+  };
+  let d = "";
+  for (let th = 0; th <= tMax + 1e-9; th += 0.05) {
+    const [x, y] = pt(th);
+    d += `${d ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
+  }
+  // the inner whorl the shell closes onto, one turn back
+  let septa = "";
+  const inner = Math.exp(-2 * Math.PI * b);
+  for (let th = 2 * Math.PI; th <= tMax; th += Math.PI / 6) {
+    const [x1, y1] = pt(th);
+    const [x2, y2] = pt(th, inner);
+    septa += `M${x1.toFixed(2)},${y1.toFixed(2)}Q${((x1 + x2) / 2 * 0.92).toFixed(2)},${((y1 + y2) / 2 * 0.92).toFixed(2)} ${x2.toFixed(2)},${y2.toFixed(2)}`;
+  }
+  const shell = document.createElementNS(NS, "path");
+  shell.setAttribute("d", d);
+  shell.setAttribute("class", "nautilus-shell");
+  const walls = document.createElementNS(NS, "path");
+  walls.setAttribute("d", septa);
+  walls.setAttribute("class", "nautilus-septa");
+  svg.append(walls, shell);
+  return svg;
+}

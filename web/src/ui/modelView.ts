@@ -101,14 +101,14 @@ export class ModelView {
     if (!build || !ov) return;
     this.clip.constant = ov.robotLength * this.opts.sectionPos;
     if (build.main) {
-      this.group.add(this.meshOf(build.main, 0x8cbae6, 1));
+      this.group.add(this.meshOf(build.main, 0xe6dccb, 1));
       if (this.opts.edges) {
-        const e = this.edgesOf(build.main, 0x3d5a78);
+        const e = this.edgesOf(build.main, 0x5b4a3a);
         if (e) this.group.add(e);
       }
     }
     if (build.elastic) {
-      this.group.add(this.meshOf(build.elastic, 0xff9a3c, 1));
+      this.group.add(this.meshOf(build.elastic, 0xff6b4a, 1));
       if (this.opts.edges) {
         const e = this.edgesOf(build.elastic, 0x9a4f10);
         if (e) this.group.add(e);

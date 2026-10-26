@@ -19,31 +19,36 @@ export interface Palette {
   highlight: string;
 }
 
+/** "Tide" palette: ink spiral, coral centre line, sea-glass and sand units. */
 export const LIGHT: Palette = {
-  bg: "#ffffff",
-  fg: "#333333",
-  muted: "#6b7078",
-  grid: "#d9dce1",
-  spiral: "#1f77b4",
-  center: "#ff7f0e",
-  primaryFill: "rgba(158,202,225,0.35)",
-  primaryEdge: "#6baed6",
-  mirrorFill: "rgba(161,217,155,0.35)",
-  mirrorEdge: "#74c476",
-  elastic: "#ff7f0e",
-  ray: "#9aa0a6",
-  highlight: "#d62728",
+  bg: "#fbf7ee",
+  fg: "#10262c",
+  muted: "#5b7174",
+  grid: "#e2dccd",
+  spiral: "#10262c",
+  center: "#e0522e",
+  primaryFill: "rgba(15,122,110,0.16)",
+  primaryEdge: "#0f7a6e",
+  mirrorFill: "rgba(201,138,0,0.14)",
+  mirrorEdge: "#b98b2c",
+  elastic: "#e0522e",
+  ray: "#8a9a9c",
+  highlight: "#e0522e",
 };
 
 export const DARK: Palette = {
   ...LIGHT,
-  bg: "#1b1d21",
-  fg: "#e4e6ea",
-  muted: "#9aa0a8",
-  grid: "#3a3e45",
-  spiral: "#5aa9e6",
-  primaryFill: "rgba(90,169,230,0.25)",
-  mirrorFill: "rgba(116,196,118,0.25)",
+  bg: "#071e27",
+  fg: "#e8eee8",
+  muted: "#8aa4a7",
+  grid: "#16343f",
+  spiral: "#e8eee8",
+  center: "#ff6b4a",
+  primaryFill: "rgba(95,211,196,0.16)",
+  primaryEdge: "#5fd3c4",
+  mirrorFill: "rgba(255,193,69,0.12)",
+  mirrorEdge: "#d9a441",
+  elastic: "#ff6b4a",
 };
 
 const NS = "http://www.w3.org/2000/svg";
