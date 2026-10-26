@@ -39,6 +39,8 @@ export interface EngineeringHooks {
 export function mountEngineering(app: HTMLElement, store: Store, hooks: EngineeringHooks) {
 const cad = new CadClient();
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+// the space scene keeps the whole app dark, whatever the system theme
+const isDark = () => darkQuery.matches || document.documentElement.dataset.env === "space";
 let visible = false;
 
 // ---------------------------------------------------------------- layout
@@ -129,7 +131,7 @@ let highlight: number | null = null;
 function drawSketch() {
   const res = store.resolved;
   const d = res.design;
-  const palette = darkQuery.matches ? DARK : LIGHT;
+  const palette = isDark() ? DARK : LIGHT;
   if (!d) {
     polarSvg.replaceChildren();
     cartSvg.replaceChildren();
@@ -164,7 +166,7 @@ new ResizeObserver(queueSketch).observe(polarHost);
 new ResizeObserver(queueSketch).observe(cartHost);
 darkQuery.addEventListener("change", () => {
   queueSketch();
-  modelView.vp.setTheme(darkQuery.matches);
+  modelView.vp.setTheme(isDark());
 });
 cartSvg.addEventListener("mousemove", (ev) => {
   const d = store.resolved.design;
@@ -501,6 +503,7 @@ const api = {
   setVisible(v: boolean) {
     visible = v;
     if (v) {
+      modelView.vp.setTheme(isDark());
       modelView.vp.resize();
       queueSketch();
       if (JSON.stringify(store.params) + modelView.opts.holes !== builtKey) scheduleBuild(0);

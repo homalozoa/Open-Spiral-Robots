@@ -25,6 +25,8 @@ const NACRE = new THREE.Color(0xf1e7d8);
 const CORAL = new THREE.Color(0xff6b4a);
 
 export type Quality = "high" | "medium" | "low";
+/** Where the robot is shown: deep space (default) or under water. */
+export type Environment = "space" | "ocean";
 export type PickHit = { kind: "link"; index: number; point: THREE.Vector3 } | { kind: "object"; point: THREE.Vector3 };
 
 /** Water colours per theme: [fog / horizon, deep]. */
@@ -73,6 +75,15 @@ export class Stage {
   private snow: THREE.Points | null = null;
   private snowUniforms = { uTime: { value: 0 }, uSize: { value: 2 }, uBox: { value: new THREE.Vector3(1, 1, 1) }, uOrigin: { value: new THREE.Vector3() } };
   private grabLine: Line2;
+  env: Environment = "space";
+  private hemi: THREE.HemisphereLight;
+  private space = new THREE.Group();
+  private stars: THREE.Points | null = null;
+  private galaxy: THREE.Points | null = null;
+  private spaceGrid: THREE.Mesh | null = null;
+  private shadowPlane: THREE.Mesh;
+  private spiralB = 0.1764;
+  private spaceUniforms = { uTime: { value: 0 }, uPx: { value: 1 } };
   private sun: THREE.DirectionalLight;
   private meta: WorkerMeta | null = null;
   private autoFrame = true;
@@ -123,7 +134,8 @@ export class Stage {
     this.controls.addEventListener("change", () => this.invalidate());
 
     // light from the surface: a cool sky fill and a warm key sun
-    this.scene.add(new THREE.HemisphereLight(0xcdeff0, 0x3b2f22, 0.9));
+    this.hemi = new THREE.HemisphereLight(0xcdeff0, 0x3b2f22, 0.9);
+    this.scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xfff3dd, 2.4);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
@@ -135,7 +147,10 @@ export class Stage {
     this.seabedMat = this.makeSeabedMaterial();
     this.seabed = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.seabedMat);
     this.seabed.receiveShadow = true;
-    this.scene.add(this.seabed, this.robot, this.ghosts, this.refs, this.mount);
+    this.shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.35 }));
+    this.shadowPlane.receiveShadow = true;
+    this.space.add(this.shadowPlane);
+    this.scene.add(this.seabed, this.space, this.robot, this.ghosts, this.refs, this.mount);
 
     this.trail = new Line2(new LineGeometry(), new LineMaterial({ linewidth: 2.5, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false }));
     this.trail.frustumCulled = false;
@@ -182,8 +197,10 @@ export class Stage {
         }
         this.dirty = false;
         this.updateFog();
+        this.placeSky();
         this.seabedUniforms.uTime.value = this.time;
         this.snowUniforms.uTime.value = this.time;
+        this.spaceUniforms.uTime.value = this.time;
         this.renderer.render(this.scene, this.camera);
         this.placeLabels();
         this.renders++;
@@ -224,7 +241,7 @@ export class Stage {
       this.sun.shadow.map = null as never;
     }
     this.renderer.shadowMap.type = q === "high" ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-    if (this.snow) this.snow.visible = q === "high";
+    if (this.snow) this.snow.visible = q === "high" && this.env === "ocean";
     this.seabedUniforms.uCausticAmp.value = q === "low" ? 0 : this.dark ? 0.16 : 0.14;
     // material swap: iridescent nacre only on the high tier
     if (this.meta && this.linkGeo) this.rebuildLinkMaterials();
@@ -262,6 +279,7 @@ export class Stage {
     const res = new THREE.Vector2(w, h);
     for (const l of [...this.tendons, this.trail, this.grabLine]) (l.material as LineMaterial).resolution.copy(res);
     this.snowUniforms.uSize.value = this.renderer.getPixelRatio() * 2.2;
+    this.spaceUniforms.uPx.value = this.renderer.getPixelRatio();
     this.invalidate();
   }
 
@@ -271,7 +289,43 @@ export class Stage {
     this.applyTheme();
   }
 
+  setEnvironment(env: Environment): void {
+    if (env === this.env) return;
+    this.env = env;
+    if (this.meta) this.buildEnvironment(this.meta);
+    else this.applyTheme();
+  }
+
+  /** Spiral growth rate of the background galaxy (the robot's own b). */
+  setSpiralB(b: number): void {
+    if (Math.abs(b - this.spiralB) < 1e-6) return;
+    this.spiralB = b;
+    if (this.meta && this.env === "space") this.makeGalaxy(this.meta.lengthM);
+  }
+
   private applyTheme(): void {
+    const space = this.env === "space";
+    this.space.visible = space;
+    this.seabed.visible = !space;
+    if (this.snow) this.snow.visible = !space && this.quality === "high";
+    if (space) {
+      // no air, no water: hard sunlight, a dim blue bounce, no fog
+      this.scene.fog = null;
+      this.hemi.color.set(0x8fa8ff);
+      this.hemi.groundColor.set(0x0b0d18);
+      this.hemi.intensity = 0.55;
+      this.sun.color.set(0xfff6e8);
+      this.sun.intensity = 3.2;
+      this.scene.environmentIntensity = 0.35;
+      this.invalidate();
+      return;
+    }
+    this.hemi.color.set(0xcdeff0);
+    this.hemi.groundColor.set(0x3b2f22);
+    this.hemi.intensity = 0.9;
+    this.sun.color.set(0xfff3dd);
+    this.sun.intensity = 2.4;
+    this.scene.environmentIntensity = 0.5;
     const water = new THREE.Color(this.dark ? WATER.dark : WATER.light);
     // linear fog that follows the camera distance (see updateFog): the robot
     // stays crisp, the far seabed melts into the water
@@ -341,6 +395,211 @@ export class Stage {
         );
     };
     return mat;
+  }
+
+  // ---------------------------------------------------------------- space
+  private disposePoints(p: THREE.Points | THREE.Mesh | null): void {
+    if (!p) return;
+    p.geometry.dispose();
+    (p.material as THREE.Material).dispose();
+    p.parent?.remove(p);
+  }
+
+  /** Background stars on a far sphere, gently twinkling on the high tier. */
+  private makeStars(_L: number): void {
+    this.disposePoints(this.stars);
+    const n = 2600;
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    const seed = new Float32Array(n);
+    const R = 1; // unit sky sphere, placed and scaled around the camera (see placeSky)
+    const c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      // uniform on the sphere
+      const u = Math.random() * 2 - 1;
+      const phi = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(1 - u * u);
+      pos.set([R * r * Math.cos(phi), R * r * Math.sin(phi), R * u], i * 3);
+      const temp = Math.random();
+      c.set(temp < 0.15 ? 0xffc9a0 : temp < 0.35 ? 0xa8c4ff : 0xffffff);
+      col.set([c.r, c.g, c.b], i * 3);
+      seed[i] = Math.random();
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    g.setAttribute("seed", new THREE.BufferAttribute(seed, 1));
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: this.spaceUniforms,
+      vertexShader: `
+        uniform float uTime, uPx;
+        attribute float seed; attribute vec3 color;
+        varying vec3 vC; varying float vA;
+        void main() {
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          float big = step(0.97, seed);
+          gl_PointSize = uPx * (1.1 + seed * 1.6 + big * 2.0);
+          vA = (0.35 + 0.65 * seed) * (0.75 + 0.25 * sin(uTime * (0.6 + seed * 2.0) + seed * 40.0));
+          vC = color;
+        }`,
+      fragmentShader: `
+        varying vec3 vC; varying float vA;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          gl_FragColor = vec4(vC, vA * smoothstep(0.5, 0.0, d));
+        }`,
+    });
+    this.stars = new THREE.Points(g, mat);
+    this.stars.frustumCulled = false;
+    this.space.add(this.stars);
+  }
+
+  /**
+   * A two-armed spiral galaxy behind the robot, its arms following
+   * r = a·e^(bθ) with the robot's own b: the same law at 10²¹ times the size.
+   */
+  private makeGalaxy(_L: number): void {
+    this.disposePoints(this.galaxy);
+    const n = 9000;
+    const b = Math.max(0.05, this.spiralB);
+    const turns = 3.2 * Math.PI;
+    const Rg = 1; // unit size, scaled with the sky (see placeSky)
+    const a = Rg / Math.exp(b * turns);
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    const core = new THREE.Color(0xffdcae);
+    const arm = new THREE.Color(0x9fbfff);
+    const hii = new THREE.Color(0xff8fc0);
+    const c = new THREE.Color();
+    const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+    for (let i = 0; i < n; i++) {
+      let x: number;
+      let y: number;
+      let z: number;
+      if (i < n * 0.22) {
+        // bulge
+        const r = Math.abs(gauss()) * Rg * 0.16;
+        const t = Math.random() * Math.PI * 2;
+        x = r * Math.cos(t);
+        y = r * Math.sin(t);
+        z = gauss() * Rg * 0.04;
+        c.copy(core);
+      } else {
+        const th = Math.pow(Math.random(), 0.8) * turns;
+        const r = a * Math.exp(b * th);
+        const k = i % 2 ? Math.PI : 0;
+        const spread = r * 0.16 + Rg * 0.015;
+        x = r * Math.cos(th + k) + gauss() * spread;
+        y = r * Math.sin(th + k) + gauss() * spread;
+        z = gauss() * Rg * 0.015;
+        const f = Math.min(1, r / Rg);
+        c.copy(core).lerp(arm, Math.pow(f, 0.6));
+        if (Math.random() < 0.04) c.copy(hii);
+      }
+      pos.set([x, y, z], i * 3);
+      col.set([c.r, c.g, c.b], i * 3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: this.spaceUniforms,
+      vertexShader: `
+        uniform float uTime, uPx;
+        attribute vec3 color; varying vec3 vC;
+        void main() {
+          // slow differential rotation: inner stars turn faster
+          float r = length(position.xy);
+          float ang = uTime * 0.01 / (0.3 + r);
+          vec2 p = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * position.xy;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, position.z, 1.0);
+          gl_PointSize = uPx * 2.2;
+          vC = color;
+        }`,
+      fragmentShader: `
+        varying vec3 vC;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          gl_FragColor = vec4(vC * 0.8, smoothstep(0.5, 0.0, d));
+        }`,
+    });
+    this.galaxy = new THREE.Points(g, mat);
+    this.galaxy.frustumCulled = false;
+    // tilted toward the viewer; placed in the sky by placeSky()
+    this.galaxy.rotation.set(-1.05, 0.25, 0.4);
+    this.space.add(this.galaxy);
+  }
+
+  /**
+   * Sky objects move with the camera but keep their direction, like a sky
+   * dome: the galaxy always hangs behind the robot, up and to the right.
+   */
+  private placeSky(): void {
+    if (this.env !== "space") return;
+    const d = this.camera.position.distanceTo(this.controls.target) || 1;
+    const R = d * 20;
+    if (this.camera.far < R * 1.3) {
+      this.camera.far = R * 1.3;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.stars) {
+      this.stars.position.copy(this.camera.position);
+      this.stars.scale.setScalar(R);
+    }
+    if (this.galaxy) {
+      // up and to the right of the robot in the default view; fixed in the
+      // world, so it drifts naturally when the camera is orbited
+      const dir = new THREE.Vector3(-0.12, 1, -0.2).normalize();
+      this.galaxy.position.copy(this.camera.position).addScaledVector(dir, R * 0.8);
+      this.galaxy.scale.setScalar(R * 0.22);
+    }
+  }
+
+  /** A faint holographic floor grid so sizes stay readable without a ground. */
+  private makeSpaceGrid(L: number): void {
+    this.disposePoints(this.spaceGrid);
+    const step = 10 ** Math.floor(Math.log10(L / 4));
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uStep: { value: step },
+        uCenter: { value: new THREE.Vector2(L * 0.5, 0) },
+        uFade: { value: L * 2.4 },
+      },
+      vertexShader: `
+        varying vec2 vW;
+        void main() {
+          vec4 w = modelMatrix * vec4(position, 1.0);
+          vW = w.xy;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: `
+        uniform float uStep, uFade; uniform vec2 uCenter;
+        varying vec2 vW;
+        float lines(vec2 p, float s) {
+          vec2 g = abs(fract(p / s - 0.5) - 0.5) / fwidth(p / s);
+          return 1.0 - min(min(g.x, g.y), 1.0);
+        }
+        void main() {
+          float a = max(lines(vW, uStep) * 0.3, lines(vW, uStep * 10.0));
+          float fade = 1.0 - smoothstep(uFade * 0.2, uFade, length(vW - uCenter));
+          a *= fade * 0.5;
+          if (a < 0.004) discard;
+          gl_FragColor = vec4(0.45, 0.85, 1.0, a);
+        }`,
+    });
+    this.spaceGrid = new THREE.Mesh(new THREE.PlaneGeometry(L * 12, L * 12), mat);
+    this.spaceGrid.position.set(L * 0.5, 0, L * 1e-4);
+    this.space.add(this.spaceGrid);
+    this.shadowPlane.scale.setScalar(L * 8);
+    this.shadowPlane.position.set(L * 0.5, 0, 0);
   }
 
   private makeSnow(L: number): void {
@@ -467,11 +726,19 @@ export class Stage {
     this.seabedUniforms.uScale.value = L * 0.5;
     this.seabedUniforms.uGrid.value = 10 ** Math.floor(Math.log10(L / 4));
     this.makeSnow(L);
+    this.makeStars(L);
+    this.makeGalaxy(L);
+    this.placeSky();
+    this.makeSpaceGrid(L);
 
     // a weathered stone post holds the base
     this.mount.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
     this.mount.clear();
-    const stone = new THREE.MeshStandardMaterial({ color: 0x4a5452, roughness: 0.85, metalness: 0.05 });
+    // a weathered stone post under water, a brushed-metal mast in space
+    const stone =
+      this.env === "space"
+        ? new THREE.MeshStandardMaterial({ color: 0x8b929c, roughness: 0.35, metalness: 0.85 })
+        : new THREE.MeshStandardMaterial({ color: 0x4a5452, roughness: 0.85, metalness: 0.05 });
     const bs = Math.max(L * 0.1, 0.004);
     const plate = new THREE.Mesh(new THREE.BoxGeometry(bs * 0.14, bs * 1.6, bs * 1.6), stone);
     plate.position.set(meta.mount[0] - bs * 0.07, meta.mount[1], meta.mount[2]);
@@ -721,7 +988,7 @@ export class Stage {
       sil.rotation.x = Math.PI / 2;
       sil.position.y = 0.01;
       g.add(sil);
-      add(g, 0.54, 1.75, "Diver · 1.75 m");
+      add(g, 0.54, 1.75, this.env === "space" ? "Astronaut · 1.75 m" : "Diver · 1.75 m");
     }
     this.refsBox = this.refs.children.length ? new THREE.Box3().setFromObject(this.refs) : new THREE.Box3();
     this.invalidate();

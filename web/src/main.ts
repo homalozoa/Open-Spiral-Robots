@@ -13,7 +13,7 @@ import { PhysicsClient } from "./showcase/client";
 import { getLang, setLang, t, type Key } from "./showcase/i18n";
 import { DEFAULT_TUNING, type ObjectKind, type SceneObject } from "./showcase/physics";
 import type { Frame, WorkerMeta } from "./showcase/protocol";
-import { initialQuality, Stage, type Quality } from "./showcase/stage";
+import { initialQuality, Stage, type Environment, type Quality } from "./showcase/stage";
 import { joystick, logSlider, timeline } from "./showcase/widgets";
 
 const log = logger("show");
@@ -35,8 +35,22 @@ const ui = {
 
 const app = document.getElementById("app")!;
 app.className = "show";
+let env: Environment = (() => {
+  const h = hashArgs.get("e");
+  if (h === "space" || h === "ocean") return h;
+  try {
+    const v = localStorage.getItem("openspirobs.env");
+    if (v === "space" || v === "ocean") return v;
+  } catch {
+    /* default below */
+  }
+  return "space";
+})();
+document.documentElement.dataset.env = env;
 const stageHost = el("div", { class: "stage" });
 const stage = new Stage(stageHost);
+stage.setEnvironment(env);
+stage.setSpiralB(store.params.b);
 const phys = new PhysicsClient();
 const loading = el("div", { class: "stage-loading" }, nautilus("loader"), el("span", {}, t("loading")));
 
@@ -69,6 +83,7 @@ const topbar = el(
       setLang(getLang() === "zh" ? "en" : "zh");
       location.reload();
     }, "chip", "Language"),
+    envBtn(),
     button(t("share"), () => void share(), "chip desktop-only"),
     labelled(button("⚙", () => openEngineering(true), "chip accent", t("engineering")), t("engineering")),
   ),
@@ -744,11 +759,12 @@ stageHost.addEventListener("pointercancel", endDrag);
 store.subscribe(() => {
   syncShape();
   rebuild();
+  stage.setSpiralB(store.params.b);
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => stage.setTheme(e.matches));
 
 async function share() {
-  const url = `${shareLink(store.params)}&m=${ui.mode}`;
+  const url = `${shareLink(store.params)}&m=${ui.mode}&e=${env}`;
   history.replaceState(null, "", url);
   try {
     await navigator.clipboard.writeText(url);
@@ -756,6 +772,29 @@ async function share() {
   } catch {
     say(url);
   }
+}
+
+/** Space / ocean switch: shows where you would go. */
+function envBtn(): HTMLButtonElement {
+  const b = button("", () => {
+    env = env === "space" ? "ocean" : "space";
+    document.documentElement.dataset.env = env;
+    stage.setEnvironment(env);
+    applyRefs();
+    try {
+      localStorage.setItem("openspirobs.env", env);
+    } catch {
+      /* ignore */
+    }
+    sync();
+  }, "chip env-chip");
+  const sync = () => {
+    b.textContent = env === "space" ? `≈ ${t("ocean")}` : `✦ ${t("space")}`;
+    b.title = env === "space" ? t("toOcean") : t("toSpace");
+    for (const c of refChips.querySelectorAll<HTMLElement>('[data-ref="human"]')) c.textContent = env === "space" ? t("astronaut") : t("human");
+  };
+  queueMicrotask(sync);
+  return b;
 }
 
 /** Append a text label that hides on narrow screens (icon stays). */

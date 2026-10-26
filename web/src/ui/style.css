@@ -35,6 +35,23 @@
   }
 }
 
+:root[data-env="space"] {
+  --bg: #05060d;
+  --panel: #0a0d1c;
+  --fg: #eef0f6;
+  --muted: #8f97ad;
+  --border: rgba(160, 180, 255, 0.14);
+  --accent: #8fb4ff;
+  --accent-soft: rgba(143, 180, 255, 0.12);
+  --green-soft: rgba(255, 193, 69, 0.12);
+  --ok: #6fd39a;
+  --warn: #ffc145;
+  --err: #ff6b4a;
+  --track: rgba(160, 180, 255, 0.14);
+  --input: rgba(160, 180, 255, 0.07);
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {

@@ -48,6 +48,37 @@
   }
 }
 
+/* space: always dark, the accents shift from sea glass to starlight blue */
+:root[data-env="space"] {
+  --sea-top: #12505d;
+  --sea-mid: #0a2f3b;
+  --sea-deep: #020d13;
+  --ink: #e8eee8;
+  --muted: #8aa4a7;
+  --card: rgba(3, 18, 25, 0.9);
+  --card-line: rgba(127, 214, 202, 0.16);
+  --hair: rgba(127, 214, 202, 0.22);
+  --accent: #5fd3c4;
+  --accent-ink: #03141b;
+  --coral: #ff6b4a;
+  --sun: #ffc145;
+  --chip: rgba(127, 214, 202, 0.08);
+  --chip-on: #e8eee8;
+  --chip-on-ink: #03141b;
+  --ray: rgba(170, 240, 230, 0.2);
+  --ink: #eef0f6;
+  --muted: #8f97ad;
+  --card: rgba(7, 9, 20, 0.88);
+  --card-line: rgba(160, 180, 255, 0.14);
+  --hair: rgba(160, 180, 255, 0.22);
+  --accent: #8fb4ff;
+  --accent-ink: #070914;
+  --chip: rgba(160, 180, 255, 0.08);
+  --chip-on: #eef0f6;
+  --chip-on-ink: #070914;
+  color-scheme: dark;
+}
+
 .show {
   position: relative;
   height: 100vh;
@@ -59,6 +90,13 @@
     radial-gradient(90% 60% at 55% -10%, var(--ray), transparent 60%),
     linear-gradient(180deg, var(--sea-top) 0%, var(--sea-mid) 45%, var(--sea-deep) 100%);
 }
+:root[data-env="space"] .show {
+  background:
+    radial-gradient(45% 35% at 78% 22%, rgba(120, 70, 170, 0.22), transparent 70%),
+    radial-gradient(40% 30% at 18% 70%, rgba(40, 90, 170, 0.2), transparent 70%),
+    radial-gradient(120% 90% at 50% 40%, #0b0f22 0%, #04050c 70%, #010205 100%);
+}
+:root[data-env="space"] .show .stage::before { display: none; }
 .show .stage { position: absolute; inset: 0; touch-action: none; }
 .show .stage canvas { display: block; position: relative; z-index: 1; }
 

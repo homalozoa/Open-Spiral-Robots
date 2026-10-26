@@ -24,10 +24,16 @@ timeline that charts curl and tip speed and can be scrubbed to replay any
 moment. **Hide** (or the `H` key) folds the console to a single strip so the
 robot gets the whole screen; on phones it starts folded.
 
-The look ("Tide") follows where the spiral comes from — the nautilus shell and
-the octopus arm: the robot is a nacre body under water, over a sand bed with
-moving caustics (light theme: sunlit shallows; dark theme: open ocean). The
-mark is a nautilus drawn from the robot's own law r = a·e^(bθ).
+The look follows where the spiral comes from. By default the robot floats in
+**space** — a star field, a holographic floor grid and, behind the robot, a
+spiral galaxy whose arms use the robot's own growth rate b (change the taper
+and the galaxy changes with it: the same law r = a·e^(bθ) from centimetres to
+light years). The **ocean** scene (top-bar switch) puts it under water instead:
+a nacre body over a sand bed with moving caustics, sunlit shallows in the light
+theme and open ocean in the dark one. The mark is a nautilus drawn from the
+same law. The space scene keeps the whole app, engineering drawer included,
+dark; the ocean scene follows the system theme. Share links remember the scene
+(`&e=space|ocean`).
 
 ### Engineering drawer
 

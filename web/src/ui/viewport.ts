@@ -58,7 +58,7 @@ export class Viewport {
   }
 
   setTheme(dark: boolean): void {
-    this.scene.background = new THREE.Color(dark ? 0x061a22 : 0xf3eee2);
+    this.scene.background = new THREE.Color(dark ? (document.documentElement.dataset.env === "space" ? 0x070914 : 0x061a22) : 0xf3eee2);
     this.invalidate();
   }
 

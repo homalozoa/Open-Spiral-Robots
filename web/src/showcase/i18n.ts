@@ -2,7 +2,7 @@
 // desktop tool).
 
 const zh = {
-  tagline: "对数螺旋软体机器人 · 灵感来自鹦鹉螺与章鱼腕",
+  tagline: "对数螺旋软体机器人 · 与鹦鹉螺、章鱼腕和旋涡星系同一条方程",
   modeFlex: "灵活性",
   modeSpeed: "速度",
   modeScale: "尺度",
@@ -72,6 +72,11 @@ const zh = {
   edges: "棱线",
   tendons: "线缆",
   fit: "取景",
+  space: "宇宙",
+  ocean: "海洋",
+  toOcean: "切换到海洋环境",
+  toSpace: "切换到宇宙环境",
+  astronaut: "宇航员",
   collapse: "收起",
   expand: "展开控制",
   quality: "画质",
@@ -84,7 +89,7 @@ const zh = {
 export type Key = keyof typeof zh;
 
 const en: Record<Key, string> = {
-  tagline: "Logarithmic-spiral soft robots, after the nautilus and the octopus arm",
+  tagline: "Logarithmic-spiral soft robots: the curve of the nautilus, the octopus arm and spiral galaxies",
   modeFlex: "Flexibility",
   modeSpeed: "Speed",
   modeScale: "Scale",
@@ -154,6 +159,11 @@ const en: Record<Key, string> = {
   edges: "Edges",
   tendons: "Cables",
   fit: "Fit",
+  space: "Space",
+  ocean: "Ocean",
+  toOcean: "Switch to the ocean scene",
+  toSpace: "Switch to the space scene",
+  astronaut: "Astronaut",
   collapse: "Hide",
   expand: "Controls",
   quality: "Quality",
