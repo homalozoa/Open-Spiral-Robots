@@ -111,6 +111,7 @@ export function buildDebugPanel(): DebugPanel {
           "await osr.exportStep()       // STEP bytes (Uint8Array)",
           "await osr.exportStl()        // binary STL bytes",
           "await osr.sketchZip()        // the Save 2D Sketch zip",
+          "await osr.reportPdf()        // the one-page PDF report (bytes)",
           "await osr.simulate()         // load current design into MuJoCo",
           "osr.sim.setCtrl(0, 0.8)      // drive actuator 0",
           "osr.sim.readout()            // time, tendon lengths, joint angles …",

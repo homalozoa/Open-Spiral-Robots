@@ -13,6 +13,8 @@ import { download, makeZip, timestamp } from "./core/files";
 import { defaultParams, parseParams, serializeParams } from "./core/params";
 import { resolve, resolveTendons } from "./core/state";
 import { generateMujocoXml } from "./core/xml";
+import { buildPdf, PdfCanvas } from "./core/pdf";
+import { blobToJpeg, drawSvg, svgPage, textWidth } from "./ui/svgPdf";
 import { getLog, log as rawLog, logger } from "./debug/log";
 import { buildDebugPanel } from "./debug/panel";
 import { button, el } from "./ui/controls";
@@ -119,7 +121,7 @@ function showTab(t: "model" | "sim") {
 showTab("model");
 
 // parameter column
-const panel = buildPanel(store, (a) => (a === "save-sketch" ? void saveSketch() : void configureTendons()));
+const panel = buildPanel(store, (a) => (a === "save-sketch" ? void saveSketch() : a === "save-pdf" ? void savePdfReport() : void configureTendons()));
 const paramCol = el("section", { class: "col col-params", "aria-label": "Parameters" }, el("h2", {}, "Parameters"), panel);
 
 const debug = buildDebugPanel();
@@ -392,21 +394,77 @@ async function sketchZip(stamp = ts()): Promise<Uint8Array | null> {
   try {
     files.push({ name: `polar_${stamp}.png`, data: new Uint8Array(await (await svgToPng(polar)).arrayBuffer()) });
     files.push({ name: `cartesian_${stamp}.png`, data: new Uint8Array(await (await svgToPng(cart)).arrayBuffer()) });
+    files.push({ name: `polar_${stamp}.pdf`, data: buildPdf([svgPage(polar)], "SpiRobs Design (polar)") });
+    files.push({ name: `cartesian_${stamp}.pdf`, data: buildPdf([svgPage(cart)], "Unfolded (Cartesian)") });
     let shot = "";
+    let png: Blob | null = null;
     if (builtKey) {
-      const png = await modelView.vp.screenshot();
-      files.push({ name: `preview_3d_${stamp}.png`, data: new Uint8Array(await png.arrayBuffer()) });
+      const shotPng = await modelView.vp.screenshot(true);
+      png = shotPng;
+      files.push({ name: `preview_3d_${stamp}.png`, data: new Uint8Array(await shotPng.arrayBuffer()) });
       shot = await new Promise<string>((res) => {
         const fr = new FileReader();
         fr.onload = () => res(String(fr.result));
-        fr.readAsDataURL(png);
+        fr.readAsDataURL(shotPng);
       });
     }
     files.push({ name: `report_${stamp}.svg`, data: reportSvg(polar, cart, shot, d) });
+    files.push({ name: `report_${stamp}.pdf`, data: await reportPdf(d, png) });
   } finally {
     holder.remove();
   }
   return makeZip(files);
+}
+
+async function savePdfReport() {
+  const d = store.resolved.design;
+  if (!d) return;
+  const png = builtKey ? await modelView.vp.screenshot(true) : null;
+  download(`report_${ts()}.pdf`, await reportPdf(d, png), "application/pdf");
+}
+
+/**
+ * The desktop tool's report_<ts>.pdf: an 11 x 6 in page with a parameter
+ * header, the polar and unfolded sketches as vector graphics and the 3D view
+ * as an image (same grid: polar top-left, unfolded bottom, 3D on the right).
+ */
+async function reportPdf(d: Design, shot: Blob | null): Promise<Uint8Array> {
+  const p = store.params;
+  const W = 792;
+  const H = 432;
+  const pdf = new PdfCanvas(W, H);
+  const fg = { r: 0.2, g: 0.2, b: 0.2, a: 1 };
+  const muted = { r: 0.33, g: 0.33, b: 0.33, a: 1 };
+  pdf.text(12, 22, "OpenSpiRob Design", 14, fg, true);
+  pdf.text(12, 36, `a=${p.a.toFixed(4)} mm  b=${p.b.toFixed(4)}  Δθ=${p.dtheta_deg}°  θmax=${p.theta_max_pi.toFixed(1)}π  p=${p.p.toFixed(2)}`, 9, muted);
+  pdf.text(12, 48, `Taper=${d.taperDeg.toFixed(2)}°  Tip=${d.tipSize.toFixed(2)} mm  Base=${d.baseSize.toFixed(2)} mm  Length=${d.length.toFixed(2)} mm  Units=${d.units}`, 9, muted);
+  const holder = el("div", { style: "position:absolute;left:-9999px;top:0" });
+  document.body.append(holder);
+  try {
+    // render at 2x the target box, then draw at half scale
+    const polar = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const cart = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    holder.append(polar, cart);
+    renderPolar(polar, d, { width: 560, height: 370, palette: LIGHT });
+    renderCartesian(cart, d, p.elastic_enabled, { width: 1120, height: 380, palette: LIGHT, title: "Unfolded (Cartesian)" });
+    drawSvg(pdf, polar, 10, 56, 0.5);
+    drawSvg(pdf, cart, 6, 240, 0.5);
+  } finally {
+    holder.remove();
+  }
+  pdf.text(560 + 116 - textWidth("3D Model", 11, true) / 2, 70, "3D Model", 11, fg, true);
+  if (shot) {
+    const img = await blobToJpeg(shot);
+    const boxW = 224;
+    const boxH = 340;
+    const s = Math.min(boxW / img.width, boxH / img.height);
+    const w = img.width * s;
+    const h = img.height * s;
+    pdf.image(img, 564 + (boxW - w) / 2, 80 + (boxH - h) / 2, w, h);
+  } else {
+    pdf.text(600, 240, "(generate the 3D model first)", 9, muted);
+  }
+  return buildPdf([pdf.page()], "OpenSpiRob Design report");
 }
 
 function reportSvg(polar: SVGSVGElement, cart: SVGSVGElement, shot: string, d: Design): string {
@@ -475,6 +533,7 @@ const api = {
   exportStep: async () => (await cad.request("export-step", store.params)).bytes,
   exportStl: async () => (await cad.request("export-stl", store.params)).bytes,
   sketchZip: () => sketchZip(),
+  reportPdf: async () => (store.resolved.design ? reportPdf(store.resolved.design, builtKey ? await modelView.vp.screenshot(true) : null) : null),
   simulate: () => simulateCurrent(),
   sim: simPanel.sim,
   modelView,

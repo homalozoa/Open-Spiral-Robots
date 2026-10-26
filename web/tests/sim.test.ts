@@ -1,48 +1,66 @@
-// MuJoCo WASM smoke test: the generated XML + an STL mesh load and step.
+// MuJoCo WASM: the generated XML (real design geometry, straight pose)
+// compiles, the tendons produce joint torque and the chain curls.
 import { describe, expect, it } from "vitest";
 import loadMujoco from "@mujoco/mujoco";
+import { baseUnitHeight, cableCount, sitePoints } from "../src/core/design";
 import { meshToBinarySTL } from "../src/core/files";
+import { defaultParams } from "../src/core/params";
+import { resolve } from "../src/core/state";
 import { generateMujocoXml } from "../src/core/xml";
 
-function boxStl(sx: number, sy: number, sz: number): Uint8Array {
-  const v = [0, 0, 0, sx, 0, 0, sx, sy, 0, 0, sy, 0, 0, 0, sz, sx, 0, sz, sx, sy, sz, 0, sy, sz].map((x, i) =>
-    i % 3 === 0 ? x - sx / 2 : i % 3 === 1 ? x - sy / 2 : x,
-  );
+/** A 20 x 20 x 14 mm box standing on z = 0 (stand-in for baselink.stl). */
+function boxStl(): Uint8Array {
+  const S = 20;
+  const v = [0, 0, 0, S, 0, 0, S, S, 0, 0, S, 0, 0, 0, S, S, 0, S, S, S, S, 0, S, S].map((x, i) => (i % 3 === 2 ? x * 0.7 : x - S / 2));
   const t = [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7];
   return meshToBinarySTL([{ vertices: v, triangles: t }]);
 }
 
 describe("MuJoCo", () => {
-  it("loads and steps the generated chain", async () => {
-    const mj = await loadMujoco();
-    const xml = generateMujocoXml({
-      stlName: "baselink.stl", unitHeight: 10, scale: 1.1, numUnits: 5, jointType: "hinge",
-      jointLimitDeg: 30, robotLength: 60, sitePoints: [50, 3, 60, 4], cableMode: 2,
-      jointStiffness: 5, jointDamping: 0.2, gravity: 9.81, jointAngles: [4, 4, 4, 4],
-    });
-    const vfs = new mj.MjVFS();
-    vfs.addBuffer("baselink.stl", boxStl(12, 12, 10));
-    const model = mj.MjModel.from_xml_string(xml, vfs);
-    expect(model.nu).toBe(2);
-    expect(model.ntendon).toBe(2);
-    const run = (ctrl: number) => {
+  for (const two of [true, false]) {
+    it(`${two ? "2" : "3"}-cable straight chain curls when tendon 1 pulls`, async () => {
+      const mj = await loadMujoco();
+      const { params: p, design: d } = resolve({ ...defaultParams(), two_cable: two, theta_max_pi: 4 });
+      const xml = generateMujocoXml({
+        stlName: "baselink.stl",
+        unitHeight: baseUnitHeight(d!),
+        scale: Math.exp(p.b * ((p.dtheta_deg * Math.PI) / 180)),
+        numUnits: d!.units,
+        jointType: two ? "hinge" : "ball",
+        jointLimitDeg: p.dtheta_deg,
+        robotLength: d!.length,
+        sitePoints: sitePoints(d!, p.tip_hole_pos / 100, p.base_hole_pos / 100),
+        cableMode: cableCount(p),
+        jointStiffness: p.sim_stiffness,
+        jointDamping: p.sim_damping,
+      });
+      const vfs = new mj.MjVFS();
+      vfs.addBuffer("baselink.stl", boxStl());
+      const model = mj.MjModel.from_xml_string(xml, vfs);
       const data = new mj.MjData(model);
-      data.ctrl[0] = ctrl;
-      for (let i = 0; i < 300; i++) mj.mj_step(model, data);
+      expect(model.nu).toBe(cableCount(p));
+      data.ctrl[0] = 1;
+      mj.mj_forward(model, data);
+      // tendon 1 must already produce joint torque in the straight pose
+      const qfrc = Array.from(data.qfrc_actuator as Float64Array);
+      expect(Math.max(...qfrc.map(Math.abs))).toBeGreaterThan(0.1);
+      for (let i = 0; i < 500; i++) mj.mj_step(model, data);
       const q = Array.from(data.qpos as Float64Array);
+      expect(q.every(Number.isFinite)).toBe(true);
+      if (two) {
+        // hinge angles grow toward the tip (spiral curl)
+        expect(q[0]).toBeGreaterThan(0.01);
+        expect(q[q.length - 1]).toBeGreaterThan(q[0]);
+      } else {
+        // first ball joint quaternion has rotated away from identity
+        expect(Math.abs(q[0])).toBeLessThan(0.99999);
+      }
+      const act = model.actuator(0);
+      expect(act.name).toBe("act1");
+      act.delete();
       data.delete();
-      return q;
-    };
-    const q0 = run(0);
-    const q1 = run(1);
-    expect(q1.every(Number.isFinite)).toBe(true);
-    // pulling tendon 1 changes the pose relative to the passive run
-    expect(Math.abs(q1[0] - q0[0])).toBeGreaterThan(1e-4);
-    const act = model.actuator(0);
-    expect(act.name).toBe("act1");
-    act.delete();
-    expect(model.nmesh).toBe(5);
-    model.delete();
-    vfs.delete();
-  }, 60_000);
+      model.delete();
+      vfs.delete();
+    }, 60_000);
+  }
 });

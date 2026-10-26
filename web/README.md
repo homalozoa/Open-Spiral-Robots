@@ -14,7 +14,7 @@ via [replicad](https://replicad.xyz)), and simulation on the official
 | Generate 3D Model (VTK) | three.js view with B-rep edges, wireframe, hole cutters, site points, export-frame axes and a section plane; rebuilds automatically after each change |
 | Export STEP / STL | same (binary STL, size-scaled tolerance) |
 | Export XML (tendon dialog → `robot.xml` + `baselink.stl`) | same dialog; downloads `xml_<timestamp>.zip` with the two files |
-| Save 2D Sketch (PNG/PDF) | zip with SVG + PNG of both plots, a 3D PNG and an SVG report |
+| Save 2D Sketch (PNG + PDF report) | zip with SVG, PNG and vector PDF of both plots, a 3D PNG and the report as PDF and SVG; **Save PDF Report** downloads the one-page report (parameters, vector sketches, 3D view) on its own |
 | Save / reset parameters, `exports/last_params.json` | same JSON format (files move between the two tools), autosave in the browser, share links |
 | open `robot.xml` in MuJoCo | **Simulation tab**: the exported model runs in MuJoCo inside the page, with actuator sliders, tendon / joint / tip read-outs, a tendon-length plot, play / pause / step / reset and speed control; any other `robot.xml` + meshes can be opened too |
 
@@ -65,7 +65,9 @@ npm test
 * `tests/cad.test.ts` — OpenCascade solids compared with the desktop tool's CadQuery solids
   (volumes of body and elastic layer for 2-cable, 3-cable, 4-cable teardrop and posed models,
   within 1e-4), plus base link, STEP and cone-cut checks.
-* `tests/sim.test.ts` — the generated XML compiles and steps in MuJoCo WASM.
+* `tests/sim.test.ts` — the generated XML (real design geometry) compiles in MuJoCo WASM,
+  tendon 1 produces joint torque in the straight pose and the chain curls.
+* `tests/pdf.test.ts` — the PDF writer's cross-reference table and text encoding.
 
 The fixtures are produced by running the desktop tool's own functions
 (extracted from `DesignTool.py` with `ast`, so no Qt/VTK is needed):
@@ -81,7 +83,7 @@ Re-run them after changing the geometry in `design-tool/`.
 ## Layout
 
 ```
-src/core/     parameters, 2D geometry, MuJoCo XML, file formats (pure, tested)
+src/core/     parameters, 2D geometry, MuJoCo XML, STL/ZIP/PDF writers (pure, tested)
 src/cad/      OpenCascade solids (cad.ts) in a web worker (worker.ts, client.ts)
 src/sim/      MuJoCo WASM loader, stepping and rendering
 src/ui/       panels, SVG sketches, three.js views, tendon dialog

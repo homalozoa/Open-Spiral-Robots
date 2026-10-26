@@ -98,9 +98,16 @@ export class Viewport {
     this.invalidate();
   }
 
-  screenshot(): Promise<Blob> {
+  /** PNG of the view; `light` forces the light background (for reports). */
+  screenshot(light = false): Promise<Blob> {
+    const bg = this.scene.background;
+    if (light) this.scene.background = new THREE.Color(0xf5f6f8);
     this.renderer.render(this.scene, this.camera);
-    return new Promise((res, rej) => this.renderer.domElement.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), "image/png"));
+    this.scene.background = bg;
+    // toBlob snapshots the canvas now, so the normal background can come back
+    const out = new Promise<Blob>((res, rej) => this.renderer.domElement.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), "image/png"));
+    this.invalidate();
+    return out;
   }
 
   dispose(): void {

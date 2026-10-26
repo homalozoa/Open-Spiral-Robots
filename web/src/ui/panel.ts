@@ -8,7 +8,7 @@ import { el, numberControl, section, toggleControl, button, type NumberControl, 
 type NumKey = { [K in keyof Params]-?: Params[K] extends number ? K : never }[keyof Params];
 type BoolKey = { [K in keyof Params]-?: Params[K] extends boolean ? K : never }[keyof Params];
 
-export function buildPanel(store: Store, onAction: (a: "save-sketch" | "tendons") => void): HTMLElement {
+export function buildPanel(store: Store, onAction: (a: "save-sketch" | "save-pdf" | "tendons") => void): HTMLElement {
   const nums = new Map<NumKey, NumberControl>();
   const bools = new Map<BoolKey, ToggleControl>();
 
@@ -38,7 +38,12 @@ export function buildPanel(store: Store, onAction: (a: "save-sketch" | "tendons"
     num("dtheta_deg", "Δθ", "(deg)", RANGES.dtheta_deg, "Angular size of one unit"),
     num("theta_max_pi", "θ max", "(π)", RANGES.theta_max_pi, "Spiral end angle in multiples of π"),
     num("p", "p", "", RANGES.p, "Centre-spiral position between the two spiral turns"),
-    button("Save 2D Sketch", () => onAction("save-sketch"), "btn block", "Download SVG + PNG of both sketches and an SVG report"),
+    el(
+      "div",
+      { class: "btn-row" },
+      button("Save 2D Sketch", () => onAction("save-sketch"), "btn", "Zip with SVG, PNG and PDF of both sketches, the 3D view and a report"),
+      button("Save PDF Report", () => onAction("save-pdf"), "btn", "One-page PDF: parameters, vector sketches and the 3D view"),
+    ),
   );
 
   // --- Fabrication ---
